@@ -1,0 +1,105 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    --font-ui: "Hind Siliguri", system-ui, -apple-system, sans-serif;
+    --font-letter-serif: "Tiro Bangla", "Noto Serif Bengali", Georgia, serif;
+    --font-letter-sans: "Hind Siliguri", system-ui, sans-serif;
+    --font-mono-code: "JetBrains Mono", monospace;
+    --site-primary: #1E3A8A;
+    --site-bg: #F6F5F1;
+  }
+
+  body {
+    font-family: var(--font-ui);
+    background-color: var(--site-bg);
+  }
+}
+
+.font-ui {
+  font-family: var(--font-ui);
+}
+
+.font-letter-serif {
+  font-family: var(--font-letter-serif);
+}
+
+.font-letter-sans {
+  font-family: var(--font-letter-sans);
+}
+
+.font-mono-tabular {
+  font-family: var(--font-mono-code);
+  font-variant-numeric: tabular-nums;
+}
+
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+/* A4 Paper Print Calibration: strictly single page 210mm x 297mm */
+@page {
+  size: A4 portrait;
+  margin: 0;
+}
+
+@media print {
+  html,
+  body,
+  #root {
+    background: #ffffff !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    width: 210mm !important;
+    height: 297mm !important;
+    min-height: 0 !important;
+    max-height: 297mm !important;
+    overflow: hidden !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  .no-print {
+    display: none !important;
+  }
+
+  .print-reset-container {
+    display: block !important;
+    width: 210mm !important;
+    height: 297mm !important;
+    min-height: 0 !important;
+    max-height: 297mm !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    border: none !important;
+    box-shadow: none !important;
+    background: #ffffff !important;
+    overflow: hidden !important;
+  }
+
+  .print-reset-zoom {
+    display: block !important;
+    width: 210mm !important;
+    height: 297mm !important;
+    transform: none !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    border: none !important;
+    box-shadow: none !important;
+  }
+
+  .a4-sheet {
+    width: 210mm !important;
+    height: 297mm !important;
+    min-height: 297mm !important;
+    max-height: 297mm !important;
+    box-shadow: none !important;
+    border: none !important;
+    margin: 0 !important;
+    overflow: hidden !important;
+    page-break-after: avoid !important;
+    break-after: avoid !important;
+    page-break-inside: avoid !important;
+    break-inside: avoid !important;
+  }
+}
