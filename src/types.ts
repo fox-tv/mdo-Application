@@ -1,10 +1,25 @@
-export type AppTab = "editor" | "templates" | "saved" | "organization" | "admin";
+export type AppTab =
+  | "dashboard"
+  | "editor"
+  | "templates"
+  | "saved"
+  | "voice"
+  | "organization"
+  | "admin";
 
 export type LetterheadStyle = "classic" | "modern" | "archival";
 
-export type LetterFont = "serif" | "sans";
+export type LetterFont = "sutonnymj" | "serif" | "sans";
 
-export type CrestType = "academic" | "corporate" | "heritage" | "justice" | "tech" | "civic";
+export type OfficeFontMode = "bijoy" | "unicode";
+
+export type CrestType =
+  | "academic"
+  | "corporate"
+  | "heritage"
+  | "justice"
+  | "tech"
+  | "civic";
 
 export type TemplateCategory = string;
 
@@ -18,14 +33,18 @@ export interface PublicUser {
   department: string;
   role: UserRole;
   isActive: boolean;
+  avatarDataUrl?: string;
+  avatarUrl?: string;
   createdAt: string;
   lastLoginAt?: string;
 }
 
 export interface NavLabelsConfig {
+  dashboard: string;
   editor: string;
   templates: string;
   saved: string;
+  voice?: string;
   organization: string;
   admin: string;
 }
@@ -36,6 +55,43 @@ export interface CustomNavLink {
   url: string;
 }
 
+export type UiBlockPlacement =
+  | "login-top"
+  | "login-bottom"
+  | "dashboard-top"
+  | "dashboard-hero-side"
+  | "dashboard-hero-right"
+  | "dashboard-after-shortcuts"
+  | "dashboard-bottom"
+  | "header-right";
+
+export type UiBlockKind =
+  | "clock"
+  | "user-profile"
+  | "user-card"
+  | "image-banner"
+  | "image"
+  | "info-card"
+  | "notice"
+  | "html-card";
+
+export interface CustomUiBlock {
+  id: string;
+  kind: UiBlockKind;
+  placement: UiBlockPlacement;
+  title: string;
+  subtitle?: string;
+  content?: string;
+  htmlContent?: string;
+  imageUrl?: string;
+  accentColor?: string;
+  ctaLabel?: string;
+  ctaTab?: AppTab;
+  ctaUrl?: string;
+  enabled: boolean;
+  createdAt?: string;
+}
+
 export interface SiteConfig {
   websiteName: string;
   websiteSubtitle: string;
@@ -43,12 +99,23 @@ export interface SiteConfig {
   announcementText: string;
   primaryColor: string;
   surfaceBgColor: string;
-  uiFont: "hind" | "tiro" | "serif";
+  uiFont: "sutonnymj" | "hind" | "tiro" | "serif";
   defaultLetterheadStyle: LetterheadStyle;
   defaultLetterFont: LetterFont;
   navLabels: NavLabelsConfig;
   customLinks: CustomNavLink[];
   customCss: string;
+  uiTexts?: Record<string, string>;
+  showUserAvatar?: boolean;
+  showLiveClock?: boolean;
+  dashboardBannerUrl?: string;
+  dashboardBannerTitle?: string;
+  dashboardBannerCaption?: string;
+  loginBannerUrl?: string;
+  loginHeroImageUrl?: string;
+  loginHeroCaption?: string;
+  uiBlocks?: CustomUiBlock[];
+  customBlocks?: CustomUiBlock[];
   allowUserOrgEdit: boolean;
   allowUserTemplateCreate: boolean;
   allowAiDrafting: boolean;
@@ -64,6 +131,52 @@ export interface DepartmentItem {
 export interface QuickPhrase {
   id: string;
   text: string;
+}
+
+export type PluginType =
+  | "template-manager"
+  | "site-customizer"
+  | "department-manager"
+  | "backup-manager"
+  | "template-access"
+  | "ai-assistant"
+  | "dashboard-widget"
+  | "letter-snippet"
+  | "custom-css";
+
+export type TemplateAccessMode = "department" | "custom" | "all";
+
+export interface UserTemplateAccessRule {
+  mode: TemplateAccessMode;
+  allowedCategories?: string[];
+  allowedTemplateIds?: string[];
+}
+
+export interface PluginConfigData {
+  heading?: string;
+  content?: string;
+  css?: string;
+  insertText?: string;
+  accentColor?: string;
+  enforceDepartmentDefault?: boolean;
+  userTemplateRules?: Record<string, UserTemplateAccessRule>;
+}
+
+export interface SitePlugin {
+  id: string;
+  name: string;
+  description: string;
+  type: PluginType;
+  enabled: boolean;
+  builtIn: boolean;
+  config: PluginConfigData;
+  createdAt: string;
+}
+
+export interface UserUsageProfile {
+  templateCounts: Record<string, number>;
+  pinnedTemplateIds: string[];
+  recentTemplateIds: string[];
 }
 
 export interface OrganizationProfile {
@@ -138,12 +251,72 @@ export interface LetterTemplate {
   ccList: string;
 }
 
+export interface AiAssistantActionLog {
+  tool: string;
+  labelBn: string;
+  summary: string;
+}
+
+export interface AiAssistantPendingProposal {
+  id: string;
+  tool: string;
+  labelBn: string;
+  summary: string;
+  args: Record<string, unknown>;
+}
+
+export interface AiAssistantMessage {
+  id: string;
+  role: "user" | "assistant";
+  text: string;
+  timestamp: string;
+  actions?: AiAssistantActionLog[];
+  pendingProposals?: AiAssistantPendingProposal[];
+  proposalsResolved?: "applied" | "dismissed";
+  snapshotId?: string;
+  undone?: boolean;
+}
+
+export interface AiAssistantConfig {
+  assistantName: string;
+  personaRole: string;
+  customInstructions: string;
+  autoApplyEdits: boolean;
+  enableVoiceInput: boolean;
+  preferredTone: string;
+  reasoningDepth?: "deep" | "balanced";
+  quickCommands: string[];
+}
+
 export interface WorkspacePayload {
+  revision?: number;
   user: PublicUser;
   siteConfig: SiteConfig;
   organization: OrganizationProfile;
   departments: DepartmentItem[];
   templates: LetterTemplate[];
   quickPhrases: QuickPhrase[];
+  plugins: SitePlugin[];
+  userUsage: UserUsageProfile;
   letters: SavedLetter[];
+}
+
+export type LiveVoiceName = "Zephyr" | "Kore" | "Puck" | "Charon" | "Fenrir";
+
+export interface VoiceTranscriptTurn {
+  id: string;
+  role: "user" | "assistant";
+  text: string;
+  timestamp: string;
+}
+
+export interface CloudVoiceSession {
+  id: string;
+  ownerUid: string;
+  title: string;
+  voiceName: LiveVoiceName;
+  turns: VoiceTranscriptTurn[];
+  summary?: string;
+  createdAt?: string;
+  updatedAt?: string;
 }

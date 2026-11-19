@@ -2,22 +2,33 @@
 
 @layer base {
   :root {
-    --font-ui: "Hind Siliguri", system-ui, -apple-system, sans-serif;
+    --font-ui: "Hind Siliguri", "Noto Sans Bengali", system-ui, -apple-system, sans-serif;
+    --font-letter-sutonny: "Noto Serif Bengali", "Tiro Bangla", "Noto Sans Bengali", Georgia, serif;
     --font-letter-serif: "Tiro Bangla", "Noto Serif Bengali", Georgia, serif;
-    --font-letter-sans: "Hind Siliguri", system-ui, sans-serif;
+    --font-letter-sans: "Noto Sans Bengali", system-ui, sans-serif;
     --font-mono-code: "JetBrains Mono", monospace;
     --site-primary: #1E3A8A;
     --site-bg: #F6F5F1;
   }
 
+  html {
+    font-size: 16px;
+  }
+
   body {
     font-family: var(--font-ui);
+    font-size: 15px;
+    line-height: 1.6;
     background-color: var(--site-bg);
   }
 }
 
 .font-ui {
   font-family: var(--font-ui);
+}
+
+.font-letter-sutonny {
+  font-family: var(--font-letter-sutonny);
 }
 
 .font-letter-serif {

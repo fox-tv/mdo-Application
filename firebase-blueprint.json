@@ -1,0 +1,674 @@
+{
+  "entities": {
+    "UserPublicProfile": {
+      "title": "UserPublicProfile",
+      "description": "Non-PII organizational profile of an authenticated Firebase user.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "displayName": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "designation": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "department": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "role": {
+          "type": "string",
+          "enum": ["admin", "user"]
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["uid", "displayName", "role", "createdAt", "updatedAt"]
+    },
+    "UserPrivateInfo": {
+      "title": "UserPrivateInfo",
+      "description": "Isolated PII record containing verified email for an authenticated user.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "maxLength": 200
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["uid", "email", "createdAt", "updatedAt"]
+    },
+    "LetterDocument": {
+      "title": "LetterDocument",
+      "description": "Official organizational letter saved to cloud Firestore by its owner.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "ownerUid": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "ownerName": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "templateType": {
+          "type": "string",
+          "maxLength": 160
+        },
+        "refNumber": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "dateText": {
+          "type": "string",
+          "maxLength": 100
+        },
+        "subject": {
+          "type": "string",
+          "maxLength": 300
+        },
+        "recipientPrefix": {
+          "type": "string",
+          "maxLength": 60
+        },
+        "recipientName": {
+          "type": "string",
+          "maxLength": 160
+        },
+        "recipientTitle": {
+          "type": "string",
+          "maxLength": 160
+        },
+        "recipientOrg": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "recipientAddress": {
+          "type": "string",
+          "maxLength": 300
+        },
+        "salutation": {
+          "type": "string",
+          "maxLength": 100
+        },
+        "body": {
+          "type": "string",
+          "maxLength": 20000
+        },
+        "closing": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "signatoryName": {
+          "type": "string",
+          "maxLength": 160
+        },
+        "signatoryTitle": {
+          "type": "string",
+          "maxLength": 160
+        },
+        "signatoryDept": {
+          "type": "string",
+          "maxLength": 160
+        },
+        "attachments": {
+          "type": "string",
+          "maxLength": 1000
+        },
+        "ccList": {
+          "type": "string",
+          "maxLength": 1000
+        },
+        "letterheadStyle": {
+          "type": "string",
+          "enum": ["classic", "modern", "archival"]
+        },
+        "letterFont": {
+          "type": "string",
+          "enum": ["sutonnymj", "serif", "sans"]
+        },
+        "department": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "id",
+        "ownerUid",
+        "templateType",
+        "refNumber",
+        "dateText",
+        "subject",
+        "body",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "VoiceSession": {
+      "title": "VoiceSession",
+      "description": "Real-time Gemini Live voice conversation transcript saved by an authenticated user.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "ownerUid": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "title": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "voiceName": {
+          "type": "string",
+          "enum": ["Zephyr", "Kore", "Puck", "Charon", "Fenrir"]
+        },
+        "turns": {
+          "type": "array",
+          "description": "Bounded list of up to 50 transcript turns."
+        },
+        "summary": {
+          "type": "string",
+          "maxLength": 2000
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "id",
+        "ownerUid",
+        "title",
+        "voiceName",
+        "turns",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "AdminMarker": {
+      "title": "AdminMarker",
+      "description": "Trusted marker document granting admin privileges to a specific UID.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "grantedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["uid", "grantedAt"]
+    },
+    "WorkspaceMeta": {
+      "title": "WorkspaceMeta",
+      "description": "Admin-only persistent institutional configuration, organization profile, departments, quick phrases, plugins, and usage metadata.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "revision": {
+          "type": "integer"
+        },
+        "siteConfig": {
+          "type": "object"
+        },
+        "aiAssistantConfig": {
+          "type": "object"
+        },
+        "organization": {
+          "type": "object"
+        },
+        "departments": {
+          "type": "array"
+        },
+        "quickPhrases": {
+          "type": "array"
+        },
+        "plugins": {
+          "type": "array"
+        },
+        "userUsage": {
+          "type": "object"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "id",
+        "revision",
+        "siteConfig",
+        "aiAssistantConfig",
+        "organization",
+        "departments",
+        "quickPhrases",
+        "plugins",
+        "userUsage",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "WorkspaceUser": {
+      "title": "WorkspaceUser",
+      "description": "Admin-only persisted institutional user account including password hash and role.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "userId": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "passwordHash": {
+          "type": "string",
+          "maxLength": 300
+        },
+        "fullName": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "designation": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "department": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "role": {
+          "type": "string",
+          "enum": ["admin", "user"]
+        },
+        "isActive": {
+          "type": "boolean"
+        },
+        "avatarDataUrl": {
+          "type": "string",
+          "maxLength": 400000
+        },
+        "avatarUrl": {
+          "type": "string",
+          "maxLength": 1000
+        },
+        "userCreatedAt": {
+          "type": "string",
+          "maxLength": 100
+        },
+        "lastLoginAt": {
+          "type": "string",
+          "maxLength": 100
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "id",
+        "userId",
+        "passwordHash",
+        "fullName",
+        "designation",
+        "department",
+        "role",
+        "isActive",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "WorkspaceTemplate": {
+      "title": "WorkspaceTemplate",
+      "description": "Admin-only persisted institutional letter template document.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "title": {
+          "type": "string",
+          "maxLength": 300
+        },
+        "category": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "summary": {
+          "type": "string",
+          "maxLength": 1000
+        },
+        "refSuffix": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "recipientPrefix": {
+          "type": "string",
+          "maxLength": 100
+        },
+        "recipientName": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "recipientTitle": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "recipientOrg": {
+          "type": "string",
+          "maxLength": 300
+        },
+        "recipientAddress": {
+          "type": "string",
+          "maxLength": 500
+        },
+        "subject": {
+          "type": "string",
+          "maxLength": 500
+        },
+        "salutation": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "body": {
+          "type": "string",
+          "maxLength": 50000
+        },
+        "closing": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "attachments": {
+          "type": "string",
+          "maxLength": 2000
+        },
+        "ccList": {
+          "type": "string",
+          "maxLength": 2000
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["id", "title", "category", "body", "createdAt", "updatedAt"]
+    },
+    "WorkspaceLetter": {
+      "title": "WorkspaceLetter",
+      "description": "Admin-only full institutional saved letter archive record.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "templateType": {
+          "type": "string",
+          "maxLength": 300
+        },
+        "refNumber": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "dateText": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "showBanglaDate": {
+          "type": "boolean"
+        },
+        "banglaDateText": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "recipientPrefix": {
+          "type": "string",
+          "maxLength": 100
+        },
+        "recipientName": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "recipientTitle": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "recipientOrg": {
+          "type": "string",
+          "maxLength": 300
+        },
+        "recipientAddress": {
+          "type": "string",
+          "maxLength": 500
+        },
+        "subject": {
+          "type": "string",
+          "maxLength": 500
+        },
+        "salutation": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "body": {
+          "type": "string",
+          "maxLength": 50000
+        },
+        "closing": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "signatoryName": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "signatoryTitle": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "signatoryDept": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "attachments": {
+          "type": "string",
+          "maxLength": 2000
+        },
+        "ccList": {
+          "type": "string",
+          "maxLength": 2000
+        },
+        "letterheadStyle": {
+          "type": "string",
+          "enum": ["classic", "modern", "archival"]
+        },
+        "letterFont": {
+          "type": "string",
+          "enum": ["sutonnymj", "serif", "sans"]
+        },
+        "showWatermark": {
+          "type": "boolean"
+        },
+        "showSealPlaceholder": {
+          "type": "boolean"
+        },
+        "savedAt": {
+          "type": "string",
+          "maxLength": 100
+        },
+        "ownerUserId": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "ownerName": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "department": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "id",
+        "templateType",
+        "refNumber",
+        "dateText",
+        "subject",
+        "body",
+        "savedAt",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "WorkspaceMedia": {
+      "title": "WorkspaceMedia",
+      "description": "Admin-only persisted uploaded media binary (base64) for avatars and custom banners.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "filename": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "base64Data": {
+          "type": "string",
+          "maxLength": 950000
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["id", "filename", "base64Data", "createdAt", "updatedAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserPublicProfile" },
+      "description": "Non-PII public profile metadata for signed-in users."
+    },
+    "/users/{userId}/private/{docId}": {
+      "schema": { "$ref": "#/entities/UserPrivateInfo" },
+      "description": "Owner-only private PII information (email)."
+    },
+    "/letters/{letterId}": {
+      "schema": { "$ref": "#/entities/LetterDocument" },
+      "description": "Cloud-synced official letters created by users."
+    },
+    "/voice_sessions/{sessionId}": {
+      "schema": { "$ref": "#/entities/VoiceSession" },
+      "description": "Cloud-synced real-time Gemini Live voice transcripts."
+    },
+    "/admins/{userId}": {
+      "schema": { "$ref": "#/entities/AdminMarker" },
+      "description": "Admin role marker documents (read-only for verified users checking own admin status, writable only by bootstrapped admin)."
+    },
+    "/workspace_meta/{docId}": {
+      "schema": { "$ref": "#/entities/WorkspaceMeta" },
+      "description": "Admin-only persistent institutional configuration, organization profile, departments, quick phrases, and plugins."
+    },
+    "/workspace_users/{docId}": {
+      "schema": { "$ref": "#/entities/WorkspaceUser" },
+      "description": "Admin-only persisted institutional users and password hashes."
+    },
+    "/workspace_templates/{docId}": {
+      "schema": { "$ref": "#/entities/WorkspaceTemplate" },
+      "description": "Admin-only persisted institutional letter templates."
+    },
+    "/workspace_letters/{docId}": {
+      "schema": { "$ref": "#/entities/WorkspaceLetter" },
+      "description": "Admin-only full institutional saved letter archive."
+    },
+    "/workspace_media/{docId}": {
+      "schema": { "$ref": "#/entities/WorkspaceMedia" },
+      "description": "Admin-only persisted uploaded media files."
+    }
+  }
+}

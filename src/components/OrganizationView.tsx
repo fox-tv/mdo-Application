@@ -7,6 +7,7 @@ import { CrestIcon } from "./CrestIcon";
 interface OrganizationViewProps {
   org: OrganizationProfile;
   canEdit: boolean;
+  uiTexts?: Record<string, string>;
   onSaveOrg: (updated: OrganizationProfile) => Promise<void>;
 }
 
@@ -22,6 +23,7 @@ const CREST_OPTIONS: { id: CrestType; label: string }[] = [
 export const OrganizationView: React.FC<OrganizationViewProps> = ({
   org,
   canEdit,
+  uiTexts,
   onSaveOrg,
 }) => {
   const [draft, setDraft] = useState<OrganizationProfile>(org);
@@ -95,10 +97,13 @@ export const OrganizationView: React.FC<OrganizationViewProps> = ({
 
   return (
     <div className="max-w-[1200px] mx-auto px-4 sm:px-6 lg:px-8 py-8">
-      <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4 pb-6 border-b border-stone-200">
+      <div
+        data-section="org-profile-header"
+        className="flex flex-col sm:flex-row sm:items-end justify-between gap-4 pb-6 border-b border-stone-200"
+      >
         <div>
           <h1 className="text-2xl sm:text-3xl font-bold text-stone-900 tracking-tight">
-            প্রতিষ্ঠানের তথ্য ও প্যাড কনফিগারেশন
+            {uiTexts?.orgTitle || "প্রতিষ্ঠানের তথ্য ও প্যাড কনফিগারেশন"}
           </h1>
           <p className="mt-1.5 text-sm text-stone-600">
             এখানে সেট করা নাম, লোগো, ঠিকানা ও স্বাক্ষরের তথ্য সকল ব্যবহারকারীর চিঠির প্যাডে যুক্ত হবে।

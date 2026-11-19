@@ -1,3 +1,7 @@
+import type { LetterData, OfficeFontMode, OrganizationProfile, SavedLetter } from "../types.ts";
+import { unicodeToBijoy } from "./bijoy.ts";
+import { toBengaliDigits } from "./bengali.ts";
+
 function sanitizeFilename(name: string): string {
   return (
     name
@@ -15,6 +19,25 @@ function escapeHtml(text: string): string {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
+}
+
+function formatOfficeText(text: string, mode: OfficeFontMode): string {
+  return mode === "bijoy" ? unicodeToBijoy(text) : text;
+}
+
+function convertDomTextNodesToBijoy(root: HTMLElement): void {
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  const textNodes: Text[] = [];
+  let current = walker.nextNode();
+  while (current) {
+    textNodes.push(current as Text);
+    current = walker.nextNode();
+  }
+  for (const node of textNodes) {
+    if (node.nodeValue && node.nodeValue.trim()) {
+      node.nodeValue = unicodeToBijoy(node.nodeValue);
+    }
+  }
 }
 
 async function inlineImagesInClone(cloned: HTMLElement): Promise<void> {
@@ -148,7 +171,7 @@ export async function createPrintableHtmlUrl(
       display: flex;
       align-items: center;
       justify-content: space-between;
-      font-family: "Hind Siliguri", system-ui, sans-serif;
+      font-family: "Hind Siliguri", "Noto Sans Bengali", system-ui, sans-serif;
       font-size: 14px;
       box-sizing: border-box;
     }
@@ -181,8 +204,8 @@ export async function createPrintableHtmlUrl(
 </head>
 <body>
   <div class="print-bar">
-    <span>এ-৪ প্রিন্ট প্রিভিউ — ১ পেজ প্রস্তুত</span>
-    <button type="button" id="mdo-print-btn">এখনই প্রিন্ট করুন</button>
+    <span>এ-৪ মুদ্রণ প্রাকদর্শন — ১ পৃষ্ঠা প্রস্তুত</span>
+    <button type="button" id="mdo-print-btn">এখনই মুদ্রণ করুন</button>
   </div>
   <div class="sheet-holder">
     ${cloned.outerHTML}
@@ -207,12 +230,23 @@ export async function createPrintableHtmlUrl(
 
 export async function exportLetterToWord(
   element: HTMLElement | null,
-  fileNameBase: string
+  fileNameBase: string,
+  fontMode: OfficeFontMode = "bijoy"
 ): Promise<void> {
   if (!element) return;
 
   const cloned = element.cloneNode(true) as HTMLElement;
   await inlineImagesInClone(cloned);
+
+  if (fontMode === "bijoy") {
+    convertDomTextNodesToBijoy(cloned);
+  }
+
+  const msoFont = fontMode === "bijoy" ? "SutonnyMJ" : "Noto Serif Bengali";
+  const fontStack =
+    fontMode === "bijoy"
+      ? '"SutonnyMJ", "Times New Roman", serif'
+      : '"Noto Serif Bengali", "Tiro Bangla", "Noto Sans Bengali", serif';
 
   const html = `
 <!DOCTYPE html>
@@ -222,15 +256,34 @@ export async function exportLetterToWord(
 <head>
   <meta charset="utf-8" />
   <title>${escapeHtml(fileNameBase)}</title>
+  <!--[if gte mso 9]>
+  <xml>
+    <w:WordDocument>
+      <w:View>Print</w:View>
+      <w:Zoom>100</w:Zoom>
+      <w:DoNotOptimizeForBrowser/>
+    </w:WordDocument>
+  </xml>
+  <![endif]-->
   <style>
     @page { size: A4; margin: 14mm 18mm; }
+    * {
+      font-family: ${fontStack} !important;
+      mso-ascii-font-family: "${msoFont}";
+      mso-hansi-font-family: "${msoFont}";
+      mso-bidi-font-family: "${msoFont}";
+      mso-cs-font-family: "${msoFont}";
+    }
     body {
-      font-family: "Tiro Bangla", "Kalpurush", "Nikosh", "Vrinda", "SolaimanLipi", serif;
+      font-family: ${fontStack};
       color: #1c1917;
       line-height: 1.65;
-      font-size: 11pt;
+      font-size: 13pt;
     }
-    p { margin: 0 0 8pt 0; }
+    p {
+      margin: 0 0 8pt 0;
+      font-family: ${fontStack};
+    }
   </style>
 </head>
 <body>
@@ -245,6 +298,268 @@ export async function exportLetterToWord(
   const link = document.createElement("a");
   link.href = url;
   link.download = `${sanitizeFilename(fileNameBase)}.doc`;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
+}
+
+export function exportLetterToExcel(
+  letter: LetterData,
+  org: OrganizationProfile,
+  fileNameBase: string,
+  fontMode: OfficeFontMode = "bijoy"
+): void {
+  const f = (val: string) => escapeHtml(formatOfficeText(val || "", fontMode));
+  const recipientFull = [
+    letter.recipientPrefix ? `${letter.recipientPrefix},` : "",
+    letter.recipientName,
+    letter.recipientTitle,
+    letter.recipientOrg,
+    letter.recipientAddress,
+  ]
+    .filter(Boolean)
+    .join(" | ");
+
+  const signatoryFull = [
+    letter.signatoryName,
+    letter.signatoryTitle,
+    letter.signatoryDept,
+  ]
+    .filter(Boolean)
+    .join(" — ");
+
+  const rows: [string, string][] = [
+    ["প্রতিষ্ঠানের নাম", org.nameBn],
+    ["ঠিকানা ও নিবন্ধন", [org.address, org.regNumber].filter(Boolean).join(" | ")],
+    ["পত্রের ধরন", letter.templateType || "দাপ্তরিক পত্র"],
+    ["স্মারক নম্বর", letter.refNumber],
+    [
+      "তারিখ",
+      letter.showBanglaDate && letter.banglaDateText
+        ? `${letter.dateText} (${letter.banglaDateText})`
+        : letter.dateText,
+    ],
+    ["প্রাপকের বিবরণ", recipientFull],
+    ["বিষয়", letter.subject],
+    ["সম্বোধন", letter.salutation],
+    ["মূল বক্তব্য", letter.body],
+    ["সমাপ্তি সম্ভাষণ", letter.closing],
+    ["স্বাক্ষরকারী", signatoryFull],
+    ["সংযুক্তি", letter.attachments],
+    ["অনুলিপি", letter.ccList],
+  ];
+
+  const msoFont = fontMode === "bijoy" ? "SutonnyMJ" : "Noto Serif Bengali";
+  const fontStack =
+    fontMode === "bijoy"
+      ? '"SutonnyMJ", "Times New Roman", serif'
+      : '"Noto Serif Bengali", "Tiro Bangla", "Noto Sans Bengali", serif';
+
+  const bodyRows = rows
+    .map(
+      ([label, value]) => `
+    <tr>
+      <td class="label">${f(label)}</td>
+      <td class="val">${f(value).replace(/\n/g, "<br/>")}</td>
+    </tr>`
+    )
+    .join("");
+
+  const html = `<!DOCTYPE html>
+<html xmlns:o="urn:schemas-microsoft-com:office:office"
+      xmlns:x="urn:schemas-microsoft-com:office:excel"
+      xmlns="http://www.w3.org/TR/REC-html40" lang="bn">
+<head>
+  <meta charset="utf-8" />
+  <title>${f(fileNameBase)}</title>
+  <!--[if gte mso 9]>
+  <xml>
+    <x:ExcelWorkbook>
+      <x:ExcelWorksheets>
+        <x:ExcelWorksheet>
+          <x:Name>Letter_Data</x:Name>
+          <x:WorksheetOptions><x:DisplayGridlines/></x:WorksheetOptions>
+        </x:ExcelWorksheet>
+      </x:ExcelWorksheets>
+    </x:ExcelWorkbook>
+  </xml>
+  <![endif]-->
+  <style>
+    * {
+      font-family: ${fontStack} !important;
+      mso-ascii-font-family: "${msoFont}";
+      mso-hansi-font-family: "${msoFont}";
+      mso-bidi-font-family: "${msoFont}";
+    }
+    table {
+      border-collapse: collapse;
+      width: 100%;
+      font-family: ${fontStack};
+      font-size: 13pt;
+    }
+    th, td {
+      border: 1px solid #334155;
+      padding: 6px 10px;
+      vertical-align: top;
+      text-align: left;
+      font-family: ${fontStack};
+      mso-number-format: "\\@";
+    }
+    th {
+      background-color: #1E3A8A;
+      color: #FFFFFF;
+      font-weight: bold;
+      font-size: 14pt;
+    }
+    td.label {
+      background-color: #F1F5F9;
+      font-weight: bold;
+      width: 220px;
+    }
+    td.val {
+      width: 540px;
+      white-space: pre-wrap;
+    }
+  </style>
+</head>
+<body>
+  <table>
+    <thead>
+      <tr>
+        <th colspan="2">${f(org.nameBn)} — ${f("দাপ্তরিক পত্র বিবরণী (SutonnyMJ)")}</th>
+      </tr>
+    </thead>
+    <tbody>
+      ${bodyRows}
+    </tbody>
+  </table>
+</body>
+</html>`;
+
+  const blob = new Blob(["\ufeff", html], {
+    type: "application/vnd.ms-excel;charset=utf-8",
+  });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `${sanitizeFilename(fileNameBase)}.xls`;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
+}
+
+export function exportSavedLettersToExcel(
+  letters: SavedLetter[],
+  orgName: string,
+  fileNameBase: string,
+  fontMode: OfficeFontMode = "bijoy"
+): void {
+  const f = (val: string) => escapeHtml(formatOfficeText(val || "", fontMode));
+
+  const msoFont = fontMode === "bijoy" ? "SutonnyMJ" : "Noto Serif Bengali";
+  const fontStack =
+    fontMode === "bijoy"
+      ? '"SutonnyMJ", "Times New Roman", serif'
+      : '"Noto Serif Bengali", "Tiro Bangla", "Noto Sans Bengali", serif';
+
+  const tableRows = letters
+    .map(
+      (item, idx) => `
+    <tr>
+      <td>${f(toBengaliDigits(idx + 1))}</td>
+      <td>${f(item.refNumber)}</td>
+      <td>${f(item.dateText)}</td>
+      <td>${f(item.templateType)}</td>
+      <td>${f(item.subject)}</td>
+      <td>${f([item.recipientName, item.recipientOrg].filter(Boolean).join(", "))}</td>
+      <td>${f(item.signatoryName)}</td>
+      <td>${f(item.ownerName || item.ownerUserId || "")}</td>
+      <td>${f(item.body)}</td>
+    </tr>`
+    )
+    .join("");
+
+  const html = `<!DOCTYPE html>
+<html xmlns:o="urn:schemas-microsoft-com:office:office"
+      xmlns:x="urn:schemas-microsoft-com:office:excel"
+      xmlns="http://www.w3.org/TR/REC-html40" lang="bn">
+<head>
+  <meta charset="utf-8" />
+  <title>${f(fileNameBase)}</title>
+  <!--[if gte mso 9]>
+  <xml>
+    <x:ExcelWorkbook>
+      <x:ExcelWorksheets>
+        <x:ExcelWorksheet>
+          <x:Name>Saved_Letters</x:Name>
+          <x:WorksheetOptions><x:DisplayGridlines/></x:WorksheetOptions>
+        </x:ExcelWorksheet>
+      </x:ExcelWorksheets>
+    </x:ExcelWorkbook>
+  </xml>
+  <![endif]-->
+  <style>
+    * {
+      font-family: ${fontStack} !important;
+      mso-ascii-font-family: "${msoFont}";
+      mso-hansi-font-family: "${msoFont}";
+      mso-bidi-font-family: "${msoFont}";
+    }
+    table {
+      border-collapse: collapse;
+      width: 100%;
+      font-family: ${fontStack};
+      font-size: 12pt;
+    }
+    th, td {
+      border: 1px solid #334155;
+      padding: 6px 8px;
+      vertical-align: top;
+      text-align: left;
+      font-family: ${fontStack};
+      mso-number-format: "\\@";
+    }
+    th {
+      background-color: #1E3A8A;
+      color: #FFFFFF;
+      font-weight: bold;
+    }
+  </style>
+</head>
+<body>
+  <table>
+    <thead>
+      <tr>
+        <th colspan="9">${f(orgName)} — ${f("সংরক্ষিত দাপ্তরিক পত্র রেজিস্টার (SutonnyMJ)")}</th>
+      </tr>
+      <tr>
+        <th>${f("ক্রমিক")}</th>
+        <th>${f("স্মারক নম্বর")}</th>
+        <th>${f("তারিখ")}</th>
+        <th>${f("পত্রের ধরন")}</th>
+        <th>${f("বিষয়")}</th>
+        <th>${f("প্রাপক")}</th>
+        <th>${f("স্বাক্ষরকারী")}</th>
+        <th>${f("প্রস্তুতকারক")}</th>
+        <th>${f("মূল বক্তব্য")}</th>
+      </tr>
+    </thead>
+    <tbody>
+      ${tableRows}
+    </tbody>
+  </table>
+</body>
+</html>`;
+
+  const blob = new Blob(["\ufeff", html], {
+    type: "application/vnd.ms-excel;charset=utf-8",
+  });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `${sanitizeFilename(fileNameBase)}.xls`;
   document.body.appendChild(link);
   link.click();
   document.body.removeChild(link);

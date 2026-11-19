@@ -1,65 +1,90 @@
 import React, { useEffect, useState } from "react";
+import type { User as FirebaseUser } from "firebase/auth";
 import {
   AlertCircle,
   Check,
+  Cloud,
   Code2,
   Download,
   Edit3,
   KeyRound,
   Palette,
   Plus,
+  Puzzle,
   RotateCcw,
   Trash2,
   Upload,
   UserPlus,
   X,
   ArrowUpRight,
+  Shield,
 } from "lucide-react";
 import {
+  AppTab,
   CustomNavLink,
   DepartmentItem,
   LetterFont,
   LetterheadStyle,
   LetterTemplate,
   OrganizationProfile,
+  PluginConfigData,
+  PluginType,
   PublicUser,
   QuickPhrase,
   SavedLetter,
   SiteConfig,
+  SitePlugin,
+  TemplateAccessMode,
   UserRole,
+  UserTemplateAccessRule,
 } from "../types";
 import { apiRequest } from "../utils/api";
 import { toBengaliDigits } from "../utils/bengali";
+import {
+  AdminAiAssistantPanel,
+  type AssistantSyncPayload,
+} from "./AdminAiAssistantPanel";
 
 export type AdminTab =
   | "site"
+  | "ai-assistant"
+  | "plugins"
   | "users"
   | "templates"
+  | "template-access"
   | "departments"
   | "developer"
   | "security";
 
 interface AdminPanelViewProps {
   currentUser: PublicUser;
+  firebaseUser?: FirebaseUser | null;
   siteConfig: SiteConfig;
   departments: DepartmentItem[];
   templates: LetterTemplate[];
   quickPhrases: QuickPhrase[];
+  plugins: SitePlugin[];
   allLetters: SavedLetter[];
   initialTab?: AdminTab;
   onSiteConfigUpdated: (next: SiteConfig) => void;
   onDepartmentsUpdated: (depts: DepartmentItem[], tpls?: LetterTemplate[]) => void;
   onTemplatesUpdated: (tpls: LetterTemplate[]) => void;
   onPhrasesUpdated: (phrases: QuickPhrase[]) => void;
+  onPluginsUpdated: (plugins: SitePlugin[]) => void;
+  onWorkspaceMutated?: () => void;
+  onConnectGoogleCloud?: () => Promise<void>;
   onFullRestore?: (payload: {
     siteConfig: SiteConfig;
     organization: OrganizationProfile;
     departments: DepartmentItem[];
     templates: LetterTemplate[];
     quickPhrases: QuickPhrase[];
+    plugins?: SitePlugin[];
+    users?: PublicUser[];
     letters: SavedLetter[];
   }) => void;
   onOpenOrgTab?: () => void;
+  onNavigateTab?: (tab: AppTab) => void;
   onOpenLetter: (letter: SavedLetter) => void;
   onDeleteLetter: (id: string) => Promise<void>;
 }
@@ -104,24 +129,31 @@ const EMPTY_TEMPLATE_FORM: Omit<LetterTemplate, "id"> = {
 
 export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
   currentUser,
+  firebaseUser = null,
   siteConfig,
   departments,
   templates,
   quickPhrases,
+  plugins,
   allLetters,
   initialTab = "site",
   onSiteConfigUpdated,
   onDepartmentsUpdated,
   onTemplatesUpdated,
   onPhrasesUpdated,
+  onPluginsUpdated,
+  onWorkspaceMutated,
+  onConnectGoogleCloud,
   onFullRestore,
   onOpenOrgTab,
+  onNavigateTab,
   onOpenLetter,
   onDeleteLetter,
 }) => {
   const [tab, setTab] = useState<AdminTab>(initialTab);
   const [feedback, setFeedback] = useState("");
   const [errorMsg, setErrorMsg] = useState("");
+  const [connectingCloud, setConnectingCloud] = useState(false);
 
   // Users state
   const [users, setUsers] = useState<PublicUser[]>([]);
@@ -151,6 +183,18 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
   const [renamingDeptVal, setRenamingDeptVal] = useState("");
   const [newPhraseText, setNewPhraseText] = useState("");
 
+  // Plugins Studio state
+  const [editingPluginId, setEditingPluginId] = useState<string | null>(null);
+  const [pluginName, setPluginName] = useState("");
+  const [pluginDesc, setPluginDesc] = useState("");
+  const [pluginType, setPluginType] = useState<PluginType>("dashboard-widget");
+  const [pluginConfig, setPluginConfig] = useState<PluginConfigData>({
+    heading: "",
+    content: "",
+    insertText: "",
+    css: "",
+  });
+
   // Site config form & custom links
   const [siteForm, setSiteForm] = useState<SiteConfig>(siteConfig);
   const [newLinkLabel, setNewLinkLabel] = useState("");
@@ -161,6 +205,15 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
   // Own password change
   const [curPass, setCurPass] = useState("");
   const [nextPass, setNextPass] = useState("");
+
+  // Template Access Control Plugin state
+  const [selectedAccessUserId, setSelectedAccessUserId] = useState<string>("");
+  const [accessRuleDraft, setAccessRuleDraft] = useState<UserTemplateAccessRule>({
+    mode: "department",
+    allowedCategories: [],
+    allowedTemplateIds: [],
+  });
+  const [savingAccessRule, setSavingAccessRule] = useState(false);
 
   useEffect(() => {
     setSiteForm(siteConfig);
@@ -199,6 +252,27 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
     void fetchUsers();
   }, []);
 
+  const accessPlugin = plugins.find((p) => p.type === "template-access");
+  const accessPluginRules = accessPlugin?.config?.userTemplateRules || {};
+
+  useEffect(() => {
+    if (users.length === 0) return;
+    const stillExists = users.some((u) => u.userId === selectedAccessUserId);
+    const chosenId = stillExists
+      ? selectedAccessUserId
+      : users.find((u) => u.role !== "admin")?.userId || users[0].userId;
+
+    if (chosenId !== selectedAccessUserId) {
+      setSelectedAccessUserId(chosenId);
+    }
+    const existingRule = accessPluginRules[chosenId];
+    setAccessRuleDraft({
+      mode: existingRule?.mode || "department",
+      allowedCategories: existingRule?.allowedCategories || [],
+      allowedTemplateIds: existingRule?.allowedTemplateIds || [],
+    });
+  }, [users, selectedAccessUserId, plugins]);
+
   // ================= USER HANDLERS =================
   const handleCreateUser = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -220,6 +294,7 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
       setNewUserName("");
       setNewUserDesig("");
       setNewUserRole("user");
+      onWorkspaceMutated?.();
       showSuccess("নতুন ইউজার সফলভাবে তৈরি হয়েছে।");
     } catch (err) {
       showErr(err);
@@ -249,6 +324,7 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
       );
       setEditingUser(null);
       setEditUserPassword("");
+      onWorkspaceMutated?.();
       showSuccess("ইউজারের তথ্য ও পাসওয়ার্ড হালনাগাদ হয়েছে।");
     } catch (err) {
       showErr(err);
@@ -267,6 +343,7 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
       setUsers((prev) =>
         prev.map((item) => (item.id === res.user.id ? res.user : item))
       );
+      onWorkspaceMutated?.();
       showSuccess(
         res.user.isActive ? "ইউজার সক্রিয় করা হয়েছে।" : "ইউজার নিষ্ক্রিয় করা হয়েছে।"
       );
@@ -277,11 +354,42 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
 
   const handleDeleteUser = async (id: string) => {
     try {
-      await apiRequest(`/api/admin/users/${id}`, { method: "DELETE" });
+      const res = await apiRequest<{ plugins?: SitePlugin[] }>(
+        `/api/admin/users/${id}`,
+        { method: "DELETE" }
+      );
       setUsers((prev) => prev.filter((u) => u.id !== id));
+      if (Array.isArray(res.plugins)) {
+        onPluginsUpdated(res.plugins);
+      } else {
+        onWorkspaceMutated?.();
+      }
       showSuccess("ইউজার মুছে ফেলা হয়েছে।");
     } catch (err) {
       showErr(err);
+    }
+  };
+
+  const handleSaveUserAccessRule = async () => {
+    if (!selectedAccessUserId) return;
+    setSavingAccessRule(true);
+    try {
+      const res = await apiRequest<{ plugins: SitePlugin[] }>(
+        `/api/admin/template-access/${encodeURIComponent(selectedAccessUserId)}`,
+        {
+          method: "PUT",
+          body: JSON.stringify(accessRuleDraft),
+        }
+      );
+      onPluginsUpdated(res.plugins);
+      const target = users.find((u) => u.userId === selectedAccessUserId);
+      showSuccess(
+        `“${target?.fullName || selectedAccessUserId}” এর টেমপ্লেট প্রবেশাধিকার সংরক্ষণ করা হয়েছে।`
+      );
+    } catch (err) {
+      showErr(err);
+    } finally {
+      setSavingAccessRule(false);
     }
   };
 
@@ -497,6 +605,124 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
     });
   };
 
+  // ================= PLUGINS HANDLERS =================
+  const resetPluginForm = () => {
+    setEditingPluginId(null);
+    setPluginName("");
+    setPluginDesc("");
+    setPluginType("dashboard-widget");
+    setPluginConfig({ heading: "", content: "", insertText: "", css: "" });
+  };
+
+  const handleTogglePlugin = async (plg: SitePlugin) => {
+    try {
+      const res = await apiRequest<{ plugins: SitePlugin[] }>(
+        `/api/admin/plugins/${plg.id}`,
+        {
+          method: "PUT",
+          body: JSON.stringify({ enabled: !plg.enabled }),
+        }
+      );
+      onPluginsUpdated(res.plugins);
+      showSuccess(
+        !plg.enabled
+          ? `“${plg.name}” সক্রিয় করা হয়েছে।`
+          : `“${plg.name}” নিষ্ক্রিয় করা হয়েছে।`
+      );
+    } catch (err) {
+      showErr(err);
+    }
+  };
+
+  const handleEditPlugin = (plg: SitePlugin) => {
+    setEditingPluginId(plg.id);
+    setPluginName(plg.name);
+    setPluginDesc(plg.description);
+    setPluginType(plg.type);
+    setPluginConfig({
+      heading: plg.config?.heading || "",
+      content: plg.config?.content || "",
+      insertText: plg.config?.insertText || "",
+      css: plg.config?.css || "",
+    });
+  };
+
+  const handleSavePlugin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    try {
+      if (editingPluginId) {
+        const res = await apiRequest<{ plugins: SitePlugin[] }>(
+          `/api/admin/plugins/${editingPluginId}`,
+          {
+            method: "PUT",
+            body: JSON.stringify({
+              name: pluginName,
+              description: pluginDesc,
+              config: pluginConfig,
+            }),
+          }
+        );
+        onPluginsUpdated(res.plugins);
+        resetPluginForm();
+        showSuccess("প্লাগইনের কনফিগারেশন হালনাগাদ হয়েছে।");
+      } else {
+        const res = await apiRequest<{ plugins: SitePlugin[] }>(
+          "/api/admin/plugins",
+          {
+            method: "POST",
+            body: JSON.stringify({
+              name: pluginName,
+              description: pluginDesc,
+              type: pluginType,
+              config: pluginConfig,
+            }),
+          }
+        );
+        onPluginsUpdated(res.plugins);
+        resetPluginForm();
+        showSuccess("নতুন ইন-বিল্ট প্লাগইন সফলভাবে যুক্ত হয়েছে।");
+      }
+    } catch (err) {
+      showErr(err);
+    }
+  };
+
+  const handleDeletePlugin = async (id: string) => {
+    try {
+      const res = await apiRequest<{ plugins: SitePlugin[] }>(
+        `/api/admin/plugins/${id}`,
+        { method: "DELETE" }
+      );
+      onPluginsUpdated(res.plugins);
+      if (editingPluginId === id) {
+        resetPluginForm();
+      }
+      showSuccess("প্লাগইনটি মুছে ফেলা হয়েছে।");
+    } catch (err) {
+      showErr(err);
+    }
+  };
+
+  const openBuiltInPluginTool = (type: PluginType) => {
+    if (type === "template-manager") {
+      if (onNavigateTab) {
+        onNavigateTab("templates");
+      } else {
+        setTab("templates");
+      }
+    } else if (type === "template-access") {
+      setTab("template-access");
+    } else if (type === "ai-assistant") {
+      setTab("ai-assistant");
+    } else if (type === "site-customizer") {
+      setTab("site");
+    } else if (type === "department-manager") {
+      setTab("departments");
+    } else if (type === "backup-manager") {
+      setTab("developer");
+    }
+  };
+
   const handleDownloadBackup = async () => {
     setIsExportingBackup(true);
     try {
@@ -507,12 +733,12 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `mdo-site-backup-${new Date().toISOString().slice(0, 10)}.json`;
+      a.download = `mdo-full-server-backup-${new Date().toISOString().slice(0, 10)}.json`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
-      showSuccess("সম্পূর্ণ সাইট ও ডাটা ব্যাকআপ ডাউনলোড হয়েছে।");
+      showSuccess("১০০% সম্পূর্ণ সার্ভার ডাটা, ইউজার আইডি-পাসওয়ার্ড ও নথির ব্যাকআপ ডাউনলোড হয়েছে।");
     } catch (err) {
       showErr(err);
     } finally {
@@ -535,12 +761,20 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
         departments: DepartmentItem[];
         templates: LetterTemplate[];
         quickPhrases: QuickPhrase[];
+        plugins?: SitePlugin[];
+        users?: PublicUser[];
         letters: SavedLetter[];
       }>("/api/admin/restore", {
         method: "POST",
         body: JSON.stringify(parsed),
       });
       setSiteForm(res.siteConfig);
+      if (Array.isArray(res.users)) {
+        setUsers(res.users);
+      }
+      if (Array.isArray(res.plugins)) {
+        onPluginsUpdated(res.plugins);
+      }
       if (onFullRestore) {
         onFullRestore(res);
       } else {
@@ -548,7 +782,7 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
         onDepartmentsUpdated(res.departments, res.templates);
         onPhrasesUpdated(res.quickPhrases);
       }
-      showSuccess("ব্যাকআপ ফাইল থেকে সম্পূর্ণ সাইট সফলভাবে রিস্টোর হয়েছে।");
+      showSuccess("ব্যাকআপ ফাইল থেকে ইউজার আইডি-পাসওয়ার্ডসহ সম্পূর্ণ সার্ভার সফলভাবে রিস্টোর হয়েছে।");
     } catch (err) {
       showErr(err);
     } finally {
@@ -586,7 +820,10 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
       : templates.filter((t) => t.category === tplFilter);
 
   const subTabs: { id: AdminTab; label: string }[] = [
+    { id: "ai-assistant", label: "এআই অ্যাসিস্ট্যান্ট" },
     { id: "site", label: "সাইট ও থিম কাস্টমাইজ" },
+    { id: "plugins", label: "প্লাগইন স্টুডিও" },
+    { id: "template-access", label: "টেমপ্লেট অনুমতি" },
     { id: "users", label: "ইউজার ও পাসওয়ার্ড" },
     { id: "templates", label: "টেমপ্লেট কাস্টমাইজ" },
     { id: "departments", label: "বিভাগ ও বাক্য" },
@@ -634,6 +871,35 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
           </button>
         ))}
       </div>
+
+      {!firebaseUser && onConnectGoogleCloud && (
+        <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50/80 px-4 py-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="text-xs text-amber-950 space-y-0.5">
+            <p className="font-semibold">
+              দীর্ঘমেয়াদী স্থায়ী ক্লাউড সংরক্ষণ (৫–১০+ বছর) সক্রিয় করুন
+            </p>
+            <p className="text-amber-800">
+              সার্ভার রিস্টার্ট হলেও নতুন ইউজার, পাসওয়ার্ড, সাইট কাস্টমাইজেশন ও নথি স্থায়ী রাখতে আপনার Google অ্যাকাউন্ট সংযুক্ত করুন।
+            </p>
+          </div>
+          <button
+            type="button"
+            disabled={connectingCloud}
+            onClick={() => {
+              setConnectingCloud(true);
+              void onConnectGoogleCloud()
+                .catch((err) => showErr(err))
+                .finally(() => setConnectingCloud(false));
+            }}
+            className="inline-flex items-center justify-center gap-2 h-9 px-4 rounded-lg bg-[#1E3A8A] text-xs font-semibold text-white hover:bg-[#172D6B] disabled:opacity-60 whitespace-nowrap shrink-0 cursor-pointer"
+          >
+            <Cloud className="w-4 h-4" />
+            <span>
+              {connectingCloud ? "সংযুক্ত হচ্ছে..." : "Google ক্লাউড সংযুক্ত করুন"}
+            </span>
+          </button>
+        </div>
+      )}
 
       {/* Feedback banners */}
       {feedback && (
@@ -838,6 +1104,19 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
                     </div>
 
                     <div className="flex flex-wrap items-center gap-2 shrink-0">
+                      {u.role !== "admin" && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSelectedAccessUserId(u.userId);
+                            setTab("template-access");
+                          }}
+                          className="inline-flex items-center gap-1 h-9 px-3 rounded-lg border border-[#1E3A8A]/30 bg-[#1E3A8A]/5 text-xs font-medium text-[#1E3A8A] hover:bg-[#1E3A8A]/10 cursor-pointer"
+                        >
+                          <Shield className="w-3.5 h-3.5" />
+                          <span>টেমপ্লেট অনুমতি</span>
+                        </button>
+                      )}
                       <button
                         type="button"
                         onClick={() => {
@@ -877,6 +1156,406 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
           </div>
         </div>
       )}
+
+      {/* TAB: CUSTOMIZABLE ADMIN AI ASSISTANT */}
+      {tab === "ai-assistant" && (
+        <AdminAiAssistantPanel
+          pluginEnabled={
+            plugins.find((p) => p.type === "ai-assistant")?.enabled !== false
+          }
+          onOpenPluginStudio={() => setTab("plugins")}
+          onConfigUpdated={onWorkspaceMutated}
+          onSyncWorkspace={(sync: AssistantSyncPayload) => {
+            setSiteForm(sync.siteConfig);
+            setUsers(sync.users);
+            if (onFullRestore) {
+              onFullRestore(sync);
+            } else {
+              onSiteConfigUpdated(sync.siteConfig);
+              onDepartmentsUpdated(sync.departments, sync.templates);
+              onPhrasesUpdated(sync.quickPhrases);
+              onPluginsUpdated(sync.plugins);
+            }
+          }}
+        />
+      )}
+
+      {/* TAB: TEMPLATE ACCESS CONTROL PLUGIN */}
+      {tab === "template-access" && (() => {
+        const selectedUser =
+          users.find((u) => u.userId === selectedAccessUserId) || users[0];
+        const pluginEnabled = accessPlugin ? accessPlugin.enabled : true;
+
+        const computeAllowedCount = (
+          target: PublicUser,
+          rule: UserTemplateAccessRule
+        ): number => {
+          if (target.role === "admin" || !pluginEnabled || rule.mode === "all") {
+            return templates.length;
+          }
+          if (rule.mode === "custom") {
+            const catSet = new Set(rule.allowedCategories || []);
+            const idSet = new Set(rule.allowedTemplateIds || []);
+            return templates.filter(
+              (t) => catSet.has(t.category) || idSet.has(t.id)
+            ).length;
+          }
+          if (!target.department || target.department === "সকল বিভাগ") {
+            return templates.length;
+          }
+          return templates.filter((t) => t.category === target.department).length;
+        };
+
+        const toggleCustomCategory = (catName: string) => {
+          const cur = accessRuleDraft.allowedCategories || [];
+          const next = cur.includes(catName)
+            ? cur.filter((c) => c !== catName)
+            : [...cur, catName];
+          setAccessRuleDraft({ ...accessRuleDraft, allowedCategories: next });
+        };
+
+        const toggleCustomTemplate = (tplId: string) => {
+          const cur = accessRuleDraft.allowedTemplateIds || [];
+          const next = cur.includes(tplId)
+            ? cur.filter((id) => id !== tplId)
+            : [...cur, tplId];
+          setAccessRuleDraft({ ...accessRuleDraft, allowedTemplateIds: next });
+        };
+
+        return (
+          <div className="mt-6 space-y-6">
+            {/* Plugin Status Header */}
+            <div className="bg-white border border-stone-200 rounded-xl p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+              <div>
+                <div className="flex items-center gap-2">
+                  <Shield className="w-4 h-4 text-[#1E3A8A]" />
+                  <h2 className="text-sm font-semibold text-stone-900">
+                    বিভাগ ও ইউজারভিত্তিক টেমপ্লেট নিয়ন্ত্রণ প্লাগইন
+                  </h2>
+                  <span
+                    className={`text-xs font-semibold ${
+                      pluginEnabled ? "text-emerald-700" : "text-stone-500"
+                    }`}
+                  >
+                    · {pluginEnabled ? "সক্রিয়" : "নিষ্ক্রিয়"}
+                  </span>
+                </div>
+                <p className="mt-1 text-xs text-stone-600 leading-relaxed max-w-3xl">
+                  সক্রিয় থাকা অবস্থায় শাখাভিত্তিক ইউজারগণ স্বয়ংক্রিয়ভাবে কেবল তাঁদের নিজ নিজ বিভাগের টেমপ্লেট দেখতে পাবেন (যেমন অডিট বিভাগ শুধু অডিট বিভাগের এবং হিসাবরক্ষক বিভাগ শুধু হিসাবরক্ষক বিভাগের টেমপ্লেট)। এছাড়া নিচে যেকোনো ইউজারের জন্য আলাদাভাবে নির্দিষ্ট বিভাগ বা নির্দিষ্ট টেমপ্লেট নির্ধারণ করতে পারবেন।
+                </p>
+              </div>
+              {accessPlugin && (
+                <button
+                  type="button"
+                  onClick={() => void handleTogglePlugin(accessPlugin)}
+                  className={`h-10 px-4 rounded-lg border text-xs font-semibold shrink-0 cursor-pointer ${
+                    pluginEnabled
+                      ? "border-emerald-200 bg-emerald-50 text-emerald-800 hover:bg-emerald-100"
+                      : "border-stone-300 bg-stone-50 text-stone-700 hover:bg-stone-100"
+                  }`}
+                >
+                  {pluginEnabled ? "প্লাগইন চালু আছে (নিষ্ক্রিয় করুন)" : "প্লাগইন চালু করুন"}
+                </button>
+              )}
+            </div>
+
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+              {/* Left: User Selector */}
+              <div className="lg:col-span-4 bg-white border border-stone-200 rounded-xl overflow-hidden">
+                <div className="px-4 py-3.5 border-b border-stone-200 flex items-center justify-between">
+                  <h3 className="text-xs font-semibold text-stone-900">
+                    ব্যবহারকারী নির্বাচন করুন
+                  </h3>
+                  <span className="text-xs text-stone-500 tabular-nums">
+                    {toBengaliDigits(users.length)} জন
+                  </span>
+                </div>
+                <div className="divide-y divide-stone-200 max-h-[540px] overflow-y-auto">
+                  {users.map((u) => {
+                    const rule = accessPluginRules[u.userId] || {
+                      mode: "department" as TemplateAccessMode,
+                    };
+                    const isSelected = selectedUser?.userId === u.userId;
+                    const modeSummary =
+                      u.role === "admin"
+                        ? "অ্যাডমিন · সকল টেমপ্লেট"
+                        : rule.mode === "custom"
+                          ? `কাস্টম · ${toBengaliDigits(computeAllowedCount(u, rule))}টি`
+                          : rule.mode === "all"
+                            ? "সকল টেমপ্লেট উন্মুক্ত"
+                            : `নিজ বিভাগ (${u.department || "সকল"})`;
+
+                    return (
+                      <button
+                        key={u.id}
+                        type="button"
+                        onClick={() => setSelectedAccessUserId(u.userId)}
+                        className={`w-full text-left px-4 py-3 transition-colors cursor-pointer ${
+                          isSelected
+                            ? "bg-[#1E3A8A]/5 border-l-4 border-[#1E3A8A]"
+                            : "hover:bg-stone-50"
+                        }`}
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-sm font-semibold text-stone-900 truncate">
+                            {u.fullName}
+                          </span>
+                          <span className="text-[11px] font-mono-tabular text-stone-500 shrink-0">
+                            {u.userId}
+                          </span>
+                        </div>
+                        <p className="text-xs text-stone-600 mt-0.5 truncate">
+                          {u.designation ? `${u.designation} · ` : ""}
+                          {u.department}
+                        </p>
+                        <p className="text-[11px] font-medium text-[#1E3A8A] mt-1">
+                          {modeSummary}
+                        </p>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Right: Rule Configuration for Selected User */}
+              <div className="lg:col-span-8 bg-white border border-stone-200 rounded-xl p-6 space-y-5">
+                {!selectedUser ? (
+                  <p className="text-sm text-stone-600">
+                    ব্যবহারকারীর তালিকা লোড হচ্ছে...
+                  </p>
+                ) : selectedUser.role === "admin" ? (
+                  <div className="space-y-4">
+                    <div className="pb-3 border-b border-stone-200">
+                      <h3 className="text-base font-bold text-stone-900">
+                        {selectedUser.fullName} ({selectedUser.userId})
+                      </h3>
+                      <p className="text-xs text-stone-600 mt-0.5">
+                        {selectedUser.designation || "প্রধান প্রশাসক"} ·{" "}
+                        {selectedUser.department}
+                      </p>
+                    </div>
+                    <div className="rounded-lg border border-stone-200 bg-stone-50 p-4 text-xs text-stone-700 leading-relaxed">
+                      প্রধান প্রশাসক (অ্যাডমিন) আইডি স্বয়ংক্রিয়ভাবে সকল বিভাগের সকল ({toBengaliDigits(templates.length)}টি) টেমপ্লেট দেখতে ও নিয়ন্ত্রণ করতে পারেন। বাম তালিকা থেকে যেকোনো শাখাভিত্তিক সাধারণ ইউজার নির্বাচন করুন অথবা নতুন শাখা ইউজার তৈরি করে তাঁর জন্য নির্দিষ্ট টেমপ্লেট নির্ধারণ করুন।
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setTab("users")}
+                      className="inline-flex items-center gap-1.5 h-10 px-4 rounded-lg bg-[#1E3A8A] text-xs font-semibold text-white hover:bg-[#172D6B] cursor-pointer"
+                    >
+                      <UserPlus className="w-4 h-4" />
+                      <span>নতুন শাখাভিত্তিক ইউজার তৈরি করুন</span>
+                    </button>
+                  </div>
+                ) : (
+                  <>
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-4 border-b border-stone-200">
+                      <div>
+                        <h3 className="text-base font-bold text-stone-900">
+                          {selectedUser.fullName} ({selectedUser.userId})
+                        </h3>
+                        <p className="text-xs text-stone-600 mt-0.5">
+                          {selectedUser.designation
+                            ? `${selectedUser.designation} · `
+                            : ""}
+                          নির্ধারিত বিভাগ: <span className="font-semibold">{selectedUser.department}</span>
+                        </p>
+                      </div>
+                      <span className="text-xs font-semibold text-[#1E3A8A] tabular-nums">
+                        দৃশ্যমান টেমপ্লেট:{" "}
+                        {toBengaliDigits(
+                          computeAllowedCount(selectedUser, accessRuleDraft)
+                        )}
+                        টি
+                      </span>
+                    </div>
+
+                    <div className="space-y-2.5">
+                      <p className="text-xs font-semibold text-stone-800">
+                        প্রবেশাধিকারের ধরন নির্বাচন করুন
+                      </p>
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setAccessRuleDraft({
+                              ...accessRuleDraft,
+                              mode: "department",
+                            })
+                          }
+                          className={`p-3 rounded-lg border text-left transition-colors cursor-pointer ${
+                            accessRuleDraft.mode === "department"
+                              ? "border-[#1E3A8A] bg-[#1E3A8A]/5 text-[#1E3A8A]"
+                              : "border-stone-200 bg-white text-stone-700 hover:bg-stone-50"
+                          }`}
+                        >
+                          <p className="text-xs font-bold">
+                            শুধুমাত্র নিজ বিভাগ
+                          </p>
+                          <p className="text-[11px] opacity-80 mt-0.5">
+                            কেবল {selectedUser.department} এর টেমপ্লেট দেখবে
+                          </p>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setAccessRuleDraft({
+                              ...accessRuleDraft,
+                              mode: "custom",
+                            })
+                          }
+                          className={`p-3 rounded-lg border text-left transition-colors cursor-pointer ${
+                            accessRuleDraft.mode === "custom"
+                              ? "border-[#1E3A8A] bg-[#1E3A8A]/5 text-[#1E3A8A]"
+                              : "border-stone-200 bg-white text-stone-700 hover:bg-stone-50"
+                          }`}
+                        >
+                          <p className="text-xs font-bold">
+                            কাস্টম টেমপ্লেট নির্বাচন
+                          </p>
+                          <p className="text-[11px] opacity-80 mt-0.5">
+                            নির্দিষ্ট বিভাগ বা নির্দিষ্ট চিঠি বাছাই করুন
+                          </p>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setAccessRuleDraft({
+                              ...accessRuleDraft,
+                              mode: "all",
+                            })
+                          }
+                          className={`p-3 rounded-lg border text-left transition-colors cursor-pointer ${
+                            accessRuleDraft.mode === "all"
+                              ? "border-[#1E3A8A] bg-[#1E3A8A]/5 text-[#1E3A8A]"
+                              : "border-stone-200 bg-white text-stone-700 hover:bg-stone-50"
+                          }`}
+                        >
+                          <p className="text-xs font-bold">
+                            সকল টেমপ্লেট উন্মুক্ত
+                          </p>
+                          <p className="text-[11px] opacity-80 mt-0.5">
+                            সব বিভাগের টেমপ্লেট ব্যবহার করতে পারবে
+                          </p>
+                        </button>
+                      </div>
+                    </div>
+
+                    {accessRuleDraft.mode === "custom" && (
+                      <div className="space-y-5 pt-2">
+                        <div>
+                          <p className="text-xs font-semibold text-stone-800 mb-2">
+                            ১. অনুমোদিত বিভাগসমূহ (পুরো বিভাগের সব টেমপ্লেট দেখবে)
+                          </p>
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                            {departments.map((dept) => {
+                              const checked = (
+                                accessRuleDraft.allowedCategories || []
+                              ).includes(dept.name);
+                              const count = templates.filter(
+                                (t) => t.category === dept.name
+                              ).length;
+                              return (
+                                <label
+                                  key={dept.id}
+                                  htmlFor={`access-cat-${dept.id}`}
+                                  className="flex items-center justify-between gap-2 px-3 py-2 rounded-lg border border-stone-200 bg-stone-50 text-xs cursor-pointer"
+                                >
+                                  <span className="flex items-center gap-2 font-medium text-stone-800">
+                                    <input
+                                      id={`access-cat-${dept.id}`}
+                                      type="checkbox"
+                                      checked={checked}
+                                      onChange={() =>
+                                        toggleCustomCategory(dept.name)
+                                      }
+                                      className="w-4 h-4 accent-[#1E3A8A]"
+                                    />
+                                    <span>{dept.name}</span>
+                                  </span>
+                                  <span className="text-[11px] text-stone-500 tabular-nums">
+                                    {toBengaliDigits(count)}টি
+                                  </span>
+                                </label>
+                              );
+                            })}
+                          </div>
+                        </div>
+
+                        <div>
+                          <p className="text-xs font-semibold text-stone-800 mb-2">
+                            ২. নির্দিষ্ট টেমপ্লেট বাছাই (পৃথক পৃথকভাবে অনুমতি দিন)
+                          </p>
+                          <div className="max-h-72 overflow-y-auto border border-stone-200 rounded-lg divide-y divide-stone-200">
+                            {templates.map((tpl) => {
+                              const isViaCat = (
+                                accessRuleDraft.allowedCategories || []
+                              ).includes(tpl.category);
+                              const isDirect = (
+                                accessRuleDraft.allowedTemplateIds || []
+                              ).includes(tpl.id);
+                              return (
+                                <label
+                                  key={tpl.id}
+                                  htmlFor={`access-tpl-${tpl.id}`}
+                                  className="flex items-center justify-between gap-3 px-3.5 py-2.5 hover:bg-stone-50 cursor-pointer"
+                                >
+                                  <span className="flex items-center gap-2.5 min-w-0">
+                                    <input
+                                      id={`access-tpl-${tpl.id}`}
+                                      type="checkbox"
+                                      checked={isDirect || isViaCat}
+                                      disabled={isViaCat}
+                                      onChange={() =>
+                                        toggleCustomTemplate(tpl.id)
+                                      }
+                                      className="w-4 h-4 accent-[#1E3A8A] shrink-0"
+                                    />
+                                    <span className="min-w-0">
+                                      <span className="block text-xs font-medium text-stone-900 truncate">
+                                        {tpl.title}
+                                      </span>
+                                      <span className="block text-[11px] text-stone-500">
+                                        {tpl.category} · {tpl.refSuffix}
+                                      </span>
+                                    </span>
+                                  </span>
+                                  {isViaCat && (
+                                    <span className="text-[11px] text-[#1E3A8A] shrink-0">
+                                      বিভাগ থেকে অনুমোদিত
+                                    </span>
+                                  )}
+                                </label>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    <div className="pt-4 border-t border-stone-200 flex items-center justify-between gap-3">
+                      <p className="text-xs text-stone-500">
+                        সংরক্ষণের পর ব্যবহারকারী পুনরায় লগইন বা রিলোড করলেই নতুন তালিকা দেখতে পাবেন।
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() => void handleSaveUserAccessRule()}
+                        disabled={savingAccessRule}
+                        className="h-10 px-5 rounded-lg bg-[#1E3A8A] text-xs font-semibold text-white hover:bg-[#172D6B] disabled:opacity-60 shrink-0 cursor-pointer"
+                      >
+                        {savingAccessRule
+                          ? "সংরক্ষণ হচ্ছে..."
+                          : "অনুমতি সংরক্ষণ করুন"}
+                      </button>
+                    </div>
+                  </>
+                )}
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* TAB 2: TEMPLATES CUSTOMIZATION */}
       {tab === "templates" && (
@@ -1204,10 +1883,34 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
                   <div>
                     <label
+                      htmlFor="admin-nav-dashboard"
+                      className="block text-xs font-medium text-stone-700 mb-1"
+                    >
+                      ১ম ট্যাব (ইউজার ড্যাশবোর্ড)
+                    </label>
+                    <input
+                      id="admin-nav-dashboard"
+                      name="navLabelDashboard"
+                      type="text"
+                      value={siteForm.navLabels?.dashboard || "ড্যাশবোর্ড"}
+                      onChange={(e) =>
+                        setSiteForm({
+                          ...siteForm,
+                          navLabels: {
+                            ...siteForm.navLabels,
+                            dashboard: e.target.value,
+                          },
+                        })
+                      }
+                      className="w-full h-10 rounded-lg border border-stone-300 px-3 text-sm"
+                    />
+                  </div>
+                  <div>
+                    <label
                       htmlFor="admin-nav-editor"
                       className="block text-xs font-medium text-stone-700 mb-1"
                     >
-                      ১ম ট্যাব (চিঠি সম্পাদক)
+                      ২য় ট্যাব (চিঠি সম্পাদক)
                     </label>
                     <input
                       id="admin-nav-editor"
@@ -1231,7 +1934,7 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
                       htmlFor="admin-nav-templates"
                       className="block text-xs font-medium text-stone-700 mb-1"
                     >
-                      ২য় ট্যাব (টেমপ্লেট)
+                      ৩য় ট্যাব (টেমপ্লেট)
                     </label>
                     <input
                       id="admin-nav-templates"
@@ -1255,7 +1958,7 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
                       htmlFor="admin-nav-saved"
                       className="block text-xs font-medium text-stone-700 mb-1"
                     >
-                      ৩য় ট্যাব (সংরক্ষিত নথি)
+                      ৪র্থ ট্যাব (সংরক্ষিত নথি)
                     </label>
                     <input
                       id="admin-nav-saved"
@@ -1279,7 +1982,7 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
                       htmlFor="admin-nav-organization"
                       className="block text-xs font-medium text-stone-700 mb-1"
                     >
-                      ৪র্থ ট্যাব (প্রতিষ্ঠান)
+                      ৫ম ট্যাব (প্রতিষ্ঠান)
                     </label>
                     <input
                       id="admin-nav-organization"
@@ -1298,12 +2001,12 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
                       className="w-full h-10 rounded-lg border border-stone-300 px-3 text-sm"
                     />
                   </div>
-                  <div className="sm:col-span-2">
+                  <div>
                     <label
                       htmlFor="admin-nav-admin"
                       className="block text-xs font-medium text-stone-700 mb-1"
                     >
-                      ৫ম ট্যাব (অ্যাডমিন ও কাস্টমাইজ স্টুডিও)
+                      ৬ষ্ঠ ট্যাব (অ্যাডমিন ও কাস্টমাইজ)
                     </label>
                     <input
                       id="admin-nav-admin"
@@ -1500,15 +2203,22 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
                   <select
                     id="admin-ui-font"
                     name="uiFont"
-                    value={siteForm.uiFont || "hind"}
+                    value={siteForm.uiFont || "sutonnymj"}
                     onChange={(e) =>
                       setSiteForm({
                         ...siteForm,
-                        uiFont: e.target.value as "hind" | "tiro" | "serif",
+                        uiFont: e.target.value as
+                          | "sutonnymj"
+                          | "hind"
+                          | "tiro"
+                          | "serif",
                       })
                     }
                     className="w-full h-10 rounded-lg border border-stone-300 bg-white px-3 text-sm"
                   >
+                    <option value="sutonnymj">
+                      প্রমিত বাংলা ছাপা + সুতনি এমজে (Word/Excel)
+                    </option>
                     <option value="hind">হিন্দ শিলিগুড়ি (আধুনিক ও স্পষ্ট)</option>
                     <option value="tiro">তিরো বাংলা (ক্লাসিক ও দাপ্তরিক)</option>
                     <option value="serif">নোটো সেরিফ বাংলা (ঐতিহ্যবাহী)</option>
@@ -1521,7 +2231,7 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
                       htmlFor="admin-default-letterhead"
                       className="block text-xs font-medium text-stone-700 mb-1.5"
                     >
-                      নতুন চিঠির ডিফল্ট প্যাড
+                      নতুন পত্রের ডিফল্ট প্যাড
                     </label>
                     <select
                       id="admin-default-letterhead"
@@ -1536,7 +2246,7 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
                       className="w-full h-10 rounded-lg border border-stone-300 bg-white px-2.5 text-xs"
                     >
                       <option value="classic">ক্লাসিক দাপ্তরিক</option>
-                      <option value="modern">আধুনিক কর্পোরেট</option>
+                      <option value="modern">আধুনিক প্রাতিষ্ঠানিক</option>
                       <option value="archival">ঐতিহ্যবাহী স্মারক</option>
                     </select>
                   </div>
@@ -1545,12 +2255,12 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
                       htmlFor="admin-default-letter-font"
                       className="block text-xs font-medium text-stone-700 mb-1.5"
                     >
-                      চিঠির ডিফল্ট ফন্ট
+                      পত্রের ডিফল্ট ফন্ট
                     </label>
                     <select
                       id="admin-default-letter-font"
                       name="defaultLetterFont"
-                      value={siteForm.defaultLetterFont || "serif"}
+                      value={siteForm.defaultLetterFont || "sutonnymj"}
                       onChange={(e) =>
                         setSiteForm({
                           ...siteForm,
@@ -1559,8 +2269,8 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
                       }
                       className="w-full h-10 rounded-lg border border-stone-300 bg-white px-2.5 text-xs"
                     >
+                      <option value="sutonnymj">দাপ্তরিক ছাপা (Office: SutonnyMJ)</option>
                       <option value="serif">তিরো বাংলা (সেরিফ)</option>
-                      <option value="sans">হিন্দ শিলিগুড়ি</option>
                     </select>
                   </div>
                 </div>
@@ -1681,6 +2391,322 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
         </form>
       )}
 
+      {/* TAB: IN-BUILT PLUGINS STUDIO */}
+      {tab === "plugins" && (
+        <div className="mt-6 grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+          {/* Left: Custom Plugin Builder / Editor */}
+          <form
+            onSubmit={handleSavePlugin}
+            className="lg:col-span-5 bg-white border border-stone-200 rounded-xl p-6 space-y-4"
+          >
+            <div className="flex items-center justify-between gap-2 pb-3 border-b border-stone-200">
+              <div className="flex items-center gap-2">
+                <Puzzle className="w-4 h-4 text-[#1E3A8A]" />
+                <h2 className="text-sm font-semibold text-stone-900">
+                  {editingPluginId
+                    ? "প্লাগইন সম্পাদনা করুন"
+                    : "নতুন ইন-বিল্ট প্লাগইন তৈরি করুন"}
+                </h2>
+              </div>
+              {editingPluginId && (
+                <button
+                  type="button"
+                  onClick={resetPluginForm}
+                  className="text-xs text-stone-500 hover:text-stone-800 cursor-pointer"
+                >
+                  নতুন তৈরি
+                </button>
+              )}
+            </div>
+
+            <p className="text-xs text-stone-600 leading-relaxed">
+              ওয়েবসাইটের ড্যাশবোর্ড নোটিশ উইজেট, সম্পাদকের দ্রুত লেখা/শর্তাবলি ব্লক অথবা সাইট থিমের কাস্টম CSS প্লাগইন এখান থেকেই যোগ বা মুছুন।
+            </p>
+
+            <div>
+              <label
+                htmlFor="plugin-type-select"
+                className="block text-xs font-medium text-stone-700 mb-1"
+              >
+                প্লাগইনের ধরন
+              </label>
+              <select
+                id="plugin-type-select"
+                name="pluginType"
+                value={pluginType}
+                disabled={Boolean(editingPluginId)}
+                onChange={(e) => setPluginType(e.target.value as PluginType)}
+                className="w-full h-10 rounded-lg border border-stone-300 bg-white px-3 text-sm disabled:opacity-60"
+              >
+                <option value="dashboard-widget">
+                  ড্যাশবোর্ড নোটিশ ও ঘোষণা উইজেট
+                </option>
+                <option value="letter-snippet">
+                  সম্পাদক দ্রুত বাক্য ও অনুচ্ছেদ প্লাগইন
+                </option>
+                <option value="custom-css">সাইট কাস্টম স্টাইল (CSS) প্লাগইন</option>
+              </select>
+            </div>
+
+            <div>
+              <label
+                htmlFor="plugin-name-input"
+                className="block text-xs font-medium text-stone-700 mb-1"
+              >
+                প্লাগইনের নাম
+              </label>
+              <input
+                id="plugin-name-input"
+                name="pluginName"
+                type="text"
+                required
+                value={pluginName}
+                onChange={(e) => setPluginName(e.target.value)}
+                placeholder="যেমন: অডিট চেকলিস্ট স্নিপেট"
+                className="w-full h-10 rounded-lg border border-stone-300 px-3 text-sm"
+              />
+            </div>
+
+            <div>
+              <label
+                htmlFor="plugin-desc-input"
+                className="block text-xs font-medium text-stone-700 mb-1"
+              >
+                সংক্ষিপ্ত বিবরণ
+              </label>
+              <input
+                id="plugin-desc-input"
+                name="pluginDesc"
+                type="text"
+                value={pluginDesc}
+                onChange={(e) => setPluginDesc(e.target.value)}
+                placeholder="প্লাগইনটি কী কাজ করে লিখুন..."
+                className="w-full h-10 rounded-lg border border-stone-300 px-3 text-sm"
+              />
+            </div>
+
+            {pluginType === "dashboard-widget" && (
+              <>
+                <div>
+                  <label
+                    htmlFor="plugin-widget-heading"
+                    className="block text-xs font-medium text-stone-700 mb-1"
+                  >
+                    উইজেট শিরোনাম
+                  </label>
+                  <input
+                    id="plugin-widget-heading"
+                    name="pluginWidgetHeading"
+                    type="text"
+                    value={pluginConfig.heading || ""}
+                    onChange={(e) =>
+                      setPluginConfig({ ...pluginConfig, heading: e.target.value })
+                    }
+                    placeholder="যেমন: ত্রৈমাসিক অডিট সময়সূচি"
+                    className="w-full h-10 rounded-lg border border-stone-300 px-3 text-sm"
+                  />
+                </div>
+                <div>
+                  <label
+                    htmlFor="plugin-widget-content"
+                    className="block text-xs font-medium text-stone-700 mb-1"
+                  >
+                    ড্যাশবোর্ডে প্রদর্শিত বার্তা
+                  </label>
+                  <textarea
+                    id="plugin-widget-content"
+                    name="pluginWidgetContent"
+                    rows={4}
+                    value={pluginConfig.content || ""}
+                    onChange={(e) =>
+                      setPluginConfig({ ...pluginConfig, content: e.target.value })
+                    }
+                    placeholder="সকল ব্যবহারকারীর ড্যাশবোর্ডে যে বার্তা দেখাবে..."
+                    className="w-full rounded-lg border border-stone-300 px-3 py-2 text-sm"
+                  />
+                </div>
+              </>
+            )}
+
+            {pluginType === "letter-snippet" && (
+              <div>
+                <label
+                  htmlFor="plugin-snippet-text"
+                  className="block text-xs font-medium text-stone-700 mb-1"
+                >
+                  চিঠিতে সংযোজনের নির্ধারিত লেখা / অনুচ্ছেদ
+                </label>
+                <textarea
+                  id="plugin-snippet-text"
+                  name="pluginInsertText"
+                  rows={5}
+                  value={pluginConfig.insertText || ""}
+                  onChange={(e) =>
+                    setPluginConfig({
+                      ...pluginConfig,
+                      insertText: e.target.value,
+                    })
+                  }
+                  placeholder="সম্পাদকে এক ক্লিকেই চিঠিতে যুক্ত হওয়ার জন্য প্রয়োজনীয় দাপ্তরিক অনুচ্ছেদ লিখুন..."
+                  className="w-full rounded-lg border border-stone-300 px-3 py-2 text-sm"
+                />
+              </div>
+            )}
+
+            {pluginType === "custom-css" && (
+              <div>
+                <label
+                  htmlFor="plugin-custom-css"
+                  className="block text-xs font-medium text-stone-700 mb-1"
+                >
+                  সাইট কাস্টম CSS কোড
+                </label>
+                <textarea
+                  id="plugin-custom-css"
+                  name="pluginCss"
+                  rows={6}
+                  value={pluginConfig.css || ""}
+                  onChange={(e) =>
+                    setPluginConfig({ ...pluginConfig, css: e.target.value })
+                  }
+                  placeholder="/* যেকোনো কাস্টম CSS */"
+                  className="w-full rounded-lg border border-stone-300 bg-stone-950 text-stone-100 font-mono-tabular p-3 text-xs"
+                />
+              </div>
+            )}
+
+            <button
+              type="submit"
+              className="w-full h-10 rounded-lg bg-[#1E3A8A] text-xs font-semibold text-white hover:bg-[#172D6B] cursor-pointer"
+            >
+              {editingPluginId
+                ? "প্লাগইন হালনাগাদ করুন"
+                : "প্লাগইন যুক্ত ও সক্রিয় করুন"}
+            </button>
+          </form>
+
+          {/* Right: Active Built-in & Custom Plugins List */}
+          <div className="lg:col-span-7 space-y-6">
+            <div className="bg-white border border-stone-200 rounded-xl overflow-hidden">
+              <div className="px-5 py-4 border-b border-stone-200 flex items-center justify-between">
+                <div>
+                  <h2 className="text-sm font-semibold text-stone-900">
+                    ইন-বিল্ট ও কাস্টম প্লাগইন সমূহ
+                  </h2>
+                  <p className="text-xs text-stone-500 mt-0.5">
+                    যেকোনো সময় সক্রিয় বা নিষ্ক্রিয় করুন, সম্পাদনা করুন বা নতুন প্লাগইন তৈরি করুন
+                  </p>
+                </div>
+                <span className="text-xs text-stone-500 tabular-nums">
+                  মোট {toBengaliDigits(plugins.length)}টি
+                </span>
+              </div>
+
+              <div className="divide-y divide-stone-200">
+                {plugins.map((plg) => {
+                  const typeLabel =
+                    plg.type === "template-manager"
+                      ? "টেমপ্লেট নিয়ন্ত্রণ প্লাগইন"
+                      : plg.type === "template-access"
+                        ? "বিভাগ ও ইউজার অনুমতি প্লাগইন"
+                        : plg.type === "ai-assistant"
+                          ? "এআই অ্যাসিস্ট্যান্ট মডিউল"
+                          : plg.type === "site-customizer"
+                            ? "থিম ও মেনু প্লাগইন"
+                            : plg.type === "department-manager"
+                              ? "বিভাগ ও বাক্য প্লাগইন"
+                              : plg.type === "backup-manager"
+                                ? "১০০% ব্যাকআপ প্লাগইন"
+                                : plg.type === "dashboard-widget"
+                                  ? "ড্যাশবোর্ড উইজেট"
+                                  : plg.type === "letter-snippet"
+                                    ? "সম্পাদক লেখা ব্লক"
+                                    : "কাস্টম CSS প্লাগইন";
+
+                  return (
+                    <div
+                      key={plg.id}
+                      className="p-4 sm:px-5 flex flex-col sm:flex-row sm:items-center justify-between gap-3"
+                    >
+                      <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-1.5 text-xs text-stone-500 mb-0.5">
+                          <span className="font-medium text-stone-700">
+                            {typeLabel}
+                          </span>
+                          <span aria-hidden="true">·</span>
+                          <span>{plg.builtIn ? "মূল প্লাগইন" : "কাস্টম প্লাগইন"}</span>
+                          <span aria-hidden="true">·</span>
+                          <span
+                            className={
+                              plg.enabled
+                                ? "text-emerald-700 font-semibold"
+                                : "text-stone-500"
+                            }
+                          >
+                            {plg.enabled ? "সক্রিয়" : "নিষ্ক্রিয়"}
+                          </span>
+                        </div>
+                        <h3 className="text-sm font-semibold text-stone-900">
+                          {plg.name}
+                        </h3>
+                        {plg.description && (
+                          <p className="text-xs text-stone-600 mt-0.5">
+                            {plg.description}
+                          </p>
+                        )}
+                      </div>
+
+                      <div className="flex flex-wrap items-center gap-1.5 shrink-0">
+                        {plg.builtIn ? (
+                          <button
+                            type="button"
+                            onClick={() => openBuiltInPluginTool(plg.type)}
+                            className="h-9 px-3 rounded-lg border border-stone-300 bg-white text-xs font-medium text-[#1E3A8A] hover:bg-stone-50 cursor-pointer"
+                          >
+                            টুল খুলুন
+                          </button>
+                        ) : (
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => handleEditPlugin(plg)}
+                              aria-label={`${plg.name} সম্পাদনা করুন`}
+                              className="inline-flex items-center gap-1 h-9 px-3 rounded-lg border border-stone-300 bg-white text-xs font-medium text-stone-700 hover:bg-stone-50 cursor-pointer"
+                            >
+                              <Edit3 className="w-3.5 h-3.5" />
+                              <span>সম্পাদনা</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => void handleDeletePlugin(plg.id)}
+                              aria-label={`${plg.name} মুছুন`}
+                              className="inline-flex items-center justify-center w-9 h-9 rounded-lg border border-stone-300 bg-white text-stone-600 hover:text-red-700 hover:bg-red-50 cursor-pointer"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          </>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => void handleTogglePlugin(plg)}
+                          className={`h-9 px-3 rounded-lg border text-xs font-semibold cursor-pointer ${
+                            plg.enabled
+                              ? "border-emerald-200 bg-emerald-50 text-emerald-800 hover:bg-emerald-100"
+                              : "border-stone-300 bg-stone-50 text-stone-700 hover:bg-stone-100"
+                          }`}
+                        >
+                          {plg.enabled ? "চালু আছে" : "চালু করুন"}
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* TAB 5: DEVELOPER STUDIO & FULL BACKUP/RESTORE */}
       {tab === "developer" && (
         <div className="mt-6 grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
@@ -1768,10 +2794,10 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
           <div className="lg:col-span-5 space-y-6">
             <div className="bg-white border border-stone-200 rounded-xl p-6 space-y-4">
               <h2 className="text-sm font-semibold text-stone-900 pb-3 border-b border-stone-200">
-                পূর্ণাঙ্গ সিস্টেম ব্যাকআপ ও রিস্টোর
+                ১০০% সম্পূর্ণ সার্ভার ব্যাকআপ ও রিস্টোর
               </h2>
               <p className="text-xs text-stone-600 leading-relaxed">
-                আপনার প্রতিষ্ঠানের সকল টেমপ্লেট, বিভাগ, সেটিংস, প্যাড কনফিগারেশন ও সংরক্ষিত চিঠিপত্র একটি JSON ফাইলে সংরক্ষণ করুন এবং প্রয়োজনে যেকোনো সময় রিস্টোর করুন।
+                সকল ইউজার আইডি ও পাসওয়ার্ড, পদবি, সংরক্ষিত চিঠিপত্র, অডিটসহ সকল টেমপ্লেট, ইন-বিল্ট প্লাগইন ও সার্ভার কনফিগারেশন ১০০% সম্পূর্ণ JSON ফাইলে যেকোনো সময় ডাউনলোড এবং রিস্টোর করুন।
               </p>
 
               <button
@@ -1784,7 +2810,7 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
                 <span>
                   {isExportingBackup
                     ? "ব্যাকআপ প্রস্তুত হচ্ছে..."
-                    : "সম্পূর্ণ সাইট ব্যাকআপ ডাউনলোড (.json)"}
+                    : "১০০% সার্ভার ব্যাকআপ ডাউনলোড (.json)"}
                 </span>
               </button>
 
@@ -1839,6 +2865,7 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
             className="lg:col-span-4 bg-white border border-stone-200 rounded-xl p-5 space-y-4"
           >
             <input
+              id="admin-password-username"
               type="text"
               name="username"
               autoComplete="username"
@@ -1920,7 +2947,7 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
                           {item.refNumber}
                         </span>
                         <span aria-hidden="true">·</span>
-                        <span>তৈরিকারী: {item.ownerName || item.ownerUserId || "অ্যাডমিন"}</span>
+                        <span>প্রস্তুতকারক: {item.ownerName || item.ownerUserId || "অ্যাডমিন"}</span>
                         <span aria-hidden="true">·</span>
                         <span>{item.dateText}</span>
                       </div>

@@ -5,8 +5,8 @@ export function toBengaliDigits(value: string | number): string {
 }
 
 const GREGORIAN_MONTHS_BN = [
-  "জানুয়ারি",
-  "ফেব্রুয়ারি",
+  "জানুয়ারি",
+  "ফেব্রুয়ারি",
   "মার্চ",
   "এপ্রিল",
   "মে",
@@ -26,15 +26,22 @@ export function formatBengaliDate(date: Date = new Date()): string {
   return `${day} ${month} ${year}`;
 }
 
+export function formatBengaliTime(date: Date = new Date()): string {
+  const h = String(date.getHours()).padStart(2, "0");
+  const m = String(date.getMinutes()).padStart(2, "0");
+  const s = String(date.getSeconds()).padStart(2, "0");
+  return toBengaliDigits(`${h}:${m}:${s}`);
+}
+
 const BANGLA_MONTHS = [
   "বৈশাখ",
   "জ্যৈষ্ঠ",
-  "আষাঢ়",
+  "আষাঢ়",
   "শ্রাবণ",
   "ভাদ্র",
   "আশ্বিন",
   "কার্তিক",
-  "অগ্রহায়ণ",
+  "অগ্রহায়ণ",
   "পৌষ",
   "মাঘ",
   "ফাল্গুন",

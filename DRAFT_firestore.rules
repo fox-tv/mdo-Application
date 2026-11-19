@@ -1,0 +1,484 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Global Safety Net (Default-Deny)
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Core Primitives
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerified() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isBootstrappedAdmin() {
+      return isVerified() && request.auth.token.email == 'bipulmdmehedihasan@gmail.com';
+    }
+
+    function isAdmin() {
+      return isBootstrappedAdmin() || (isVerified() && exists(/databases/$(database)/documents/admins/$(request.auth.uid)));
+    }
+
+    function isOwner(uid) {
+      return isVerified() && request.auth.uid == uid;
+    }
+
+    // Entity Validation Blueprints
+    function isValidUserPublicProfile(data, uid) {
+      return data.keys().hasAll(['uid', 'displayName', 'role', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'displayName', 'designation', 'department', 'role', 'createdAt', 'updatedAt'])
+        && isValidId(data.uid)
+        && data.uid == uid
+        && data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 120
+        && (!('designation' in data) || (data.designation is string && data.designation.size() <= 120))
+        && (!('department' in data) || (data.department is string && data.department.size() <= 120))
+        && data.role in ['user', 'admin']
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidUserPrivateInfo(data, uid) {
+      return data.keys().hasAll(['uid', 'email', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'email', 'createdAt', 'updatedAt'])
+        && isValidId(data.uid)
+        && data.uid == uid
+        && data.email is string && data.email.size() >= 3 && data.email.size() <= 200
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidLetterDocument(data, letterId) {
+      return data.keys().hasAll([
+          'id', 'ownerUid', 'templateType', 'refNumber', 'dateText',
+          'subject', 'body', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'id', 'ownerUid', 'ownerName', 'templateType', 'refNumber', 'dateText',
+          'subject', 'recipientPrefix', 'recipientName', 'recipientTitle',
+          'recipientOrg', 'recipientAddress', 'salutation', 'body', 'closing',
+          'signatoryName', 'signatoryTitle', 'signatoryDept', 'attachments',
+          'ccList', 'letterheadStyle', 'letterFont', 'department',
+          'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.id)
+        && data.id == letterId
+        && isValidId(data.ownerUid)
+        && (!('ownerName' in data) || (data.ownerName is string && data.ownerName.size() <= 120))
+        && data.templateType is string && data.templateType.size() <= 160
+        && data.refNumber is string && data.refNumber.size() <= 120
+        && data.dateText is string && data.dateText.size() <= 100
+        && data.subject is string && data.subject.size() <= 300
+        && (!('recipientPrefix' in data) || (data.recipientPrefix is string && data.recipientPrefix.size() <= 60))
+        && (!('recipientName' in data) || (data.recipientName is string && data.recipientName.size() <= 160))
+        && (!('recipientTitle' in data) || (data.recipientTitle is string && data.recipientTitle.size() <= 160))
+        && (!('recipientOrg' in data) || (data.recipientOrg is string && data.recipientOrg.size() <= 200))
+        && (!('recipientAddress' in data) || (data.recipientAddress is string && data.recipientAddress.size() <= 300))
+        && (!('salutation' in data) || (data.salutation is string && data.salutation.size() <= 100))
+        && data.body is string && data.body.size() <= 20000
+        && (!('closing' in data) || (data.closing is string && data.closing.size() <= 120))
+        && (!('signatoryName' in data) || (data.signatoryName is string && data.signatoryName.size() <= 160))
+        && (!('signatoryTitle' in data) || (data.signatoryTitle is string && data.signatoryTitle.size() <= 160))
+        && (!('signatoryDept' in data) || (data.signatoryDept is string && data.signatoryDept.size() <= 160))
+        && (!('attachments' in data) || (data.attachments is string && data.attachments.size() <= 1000))
+        && (!('ccList' in data) || (data.ccList is string && data.ccList.size() <= 1000))
+        && (!('letterheadStyle' in data) || (data.letterheadStyle in ['classic', 'modern', 'archival']))
+        && (!('letterFont' in data) || (data.letterFont in ['sutonnymj', 'serif', 'sans']))
+        && (!('department' in data) || (data.department is string && data.department.size() <= 120))
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidVoiceSession(data, sessionId) {
+      return data.keys().hasAll(['id', 'ownerUid', 'title', 'voiceName', 'turns', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'ownerUid', 'title', 'voiceName', 'turns', 'summary', 'createdAt', 'updatedAt'])
+        && isValidId(data.id)
+        && data.id == sessionId
+        && isValidId(data.ownerUid)
+        && data.title is string && data.title.size() >= 1 && data.title.size() <= 200
+        && data.voiceName in ['Zephyr', 'Kore', 'Puck', 'Charon', 'Fenrir']
+        && data.turns is list && data.turns.size() <= 50
+        && (data.turns.size() == 0 || data.turns[0] is map)
+        && (!('summary' in data) || (data.summary is string && data.summary.size() <= 2000))
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidWorkspaceMeta(data, docId) {
+      return data.keys().hasAll([
+          'id', 'revision', 'siteConfig', 'aiAssistantConfig', 'organization',
+          'departments', 'quickPhrases', 'plugins', 'userUsage', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'id', 'revision', 'siteConfig', 'aiAssistantConfig', 'organization',
+          'departments', 'quickPhrases', 'plugins', 'userUsage', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.id)
+        && data.id == docId
+        && data.revision is int && data.revision >= 0
+        && data.siteConfig is map && data.siteConfig.keys().size() <= 60
+        && data.aiAssistantConfig is map && data.aiAssistantConfig.keys().size() <= 30
+        && data.organization is map && data.organization.keys().size() <= 30
+        && data.departments is list && data.departments.size() <= 200
+        && (data.departments.size() == 0 || data.departments[0] is map)
+        && data.quickPhrases is list && data.quickPhrases.size() <= 500
+        && (data.quickPhrases.size() == 0 || data.quickPhrases[0] is map)
+        && data.plugins is list && data.plugins.size() <= 200
+        && (data.plugins.size() == 0 || data.plugins[0] is map)
+        && data.userUsage is map && data.userUsage.keys().size() <= 500
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidWorkspaceUser(data, docId) {
+      return data.keys().hasAll([
+          'id', 'userId', 'passwordHash', 'fullName', 'designation',
+          'department', 'role', 'isActive', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'id', 'userId', 'passwordHash', 'fullName', 'designation',
+          'department', 'role', 'isActive', 'avatarDataUrl', 'avatarUrl',
+          'userCreatedAt', 'lastLoginAt', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.id)
+        && data.id == docId
+        && data.userId is string && data.userId.size() >= 1 && data.userId.size() <= 64
+        && data.passwordHash is string && data.passwordHash.size() >= 1 && data.passwordHash.size() <= 300
+        && data.fullName is string && data.fullName.size() >= 1 && data.fullName.size() <= 200
+        && data.designation is string && data.designation.size() <= 200
+        && data.department is string && data.department.size() <= 200
+        && data.role in ['admin', 'user']
+        && data.isActive is bool
+        && (!('avatarDataUrl' in data) || (data.avatarDataUrl is string && data.avatarDataUrl.size() <= 400000))
+        && (!('avatarUrl' in data) || (data.avatarUrl is string && data.avatarUrl.size() <= 1000))
+        && (!('userCreatedAt' in data) || (data.userCreatedAt is string && data.userCreatedAt.size() <= 100))
+        && (!('lastLoginAt' in data) || (data.lastLoginAt is string && data.lastLoginAt.size() <= 100))
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidWorkspaceTemplate(data, docId) {
+      return data.keys().hasAll(['id', 'title', 'category', 'body', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly([
+          'id', 'title', 'category', 'summary', 'refSuffix', 'recipientPrefix',
+          'recipientName', 'recipientTitle', 'recipientOrg', 'recipientAddress',
+          'subject', 'salutation', 'body', 'closing', 'attachments', 'ccList',
+          'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.id)
+        && data.id == docId
+        && data.title is string && data.title.size() >= 1 && data.title.size() <= 300
+        && data.category is string && data.category.size() >= 1 && data.category.size() <= 200
+        && (!('summary' in data) || (data.summary is string && data.summary.size() <= 1000))
+        && (!('refSuffix' in data) || (data.refSuffix is string && data.refSuffix.size() <= 120))
+        && (!('recipientPrefix' in data) || (data.recipientPrefix is string && data.recipientPrefix.size() <= 100))
+        && (!('recipientName' in data) || (data.recipientName is string && data.recipientName.size() <= 200))
+        && (!('recipientTitle' in data) || (data.recipientTitle is string && data.recipientTitle.size() <= 200))
+        && (!('recipientOrg' in data) || (data.recipientOrg is string && data.recipientOrg.size() <= 300))
+        && (!('recipientAddress' in data) || (data.recipientAddress is string && data.recipientAddress.size() <= 500))
+        && (!('subject' in data) || (data.subject is string && data.subject.size() <= 500))
+        && (!('salutation' in data) || (data.salutation is string && data.salutation.size() <= 200))
+        && data.body is string && data.body.size() <= 50000
+        && (!('closing' in data) || (data.closing is string && data.closing.size() <= 200))
+        && (!('attachments' in data) || (data.attachments is string && data.attachments.size() <= 2000))
+        && (!('ccList' in data) || (data.ccList is string && data.ccList.size() <= 2000))
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidWorkspaceLetter(data, docId) {
+      return data.keys().hasAll([
+          'id', 'templateType', 'refNumber', 'dateText', 'subject',
+          'body', 'savedAt', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'id', 'templateType', 'refNumber', 'dateText', 'showBanglaDate',
+          'banglaDateText', 'recipientPrefix', 'recipientName', 'recipientTitle',
+          'recipientOrg', 'recipientAddress', 'subject', 'salutation', 'body',
+          'closing', 'signatoryName', 'signatoryTitle', 'signatoryDept',
+          'attachments', 'ccList', 'letterheadStyle', 'letterFont',
+          'showWatermark', 'showSealPlaceholder', 'savedAt', 'ownerUserId',
+          'ownerName', 'department', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.id)
+        && data.id == docId
+        && data.templateType is string && data.templateType.size() <= 300
+        && data.refNumber is string && data.refNumber.size() <= 200
+        && data.dateText is string && data.dateText.size() <= 200
+        && (!('showBanglaDate' in data) || data.showBanglaDate is bool)
+        && (!('banglaDateText' in data) || (data.banglaDateText is string && data.banglaDateText.size() <= 200))
+        && (!('recipientPrefix' in data) || (data.recipientPrefix is string && data.recipientPrefix.size() <= 100))
+        && (!('recipientName' in data) || (data.recipientName is string && data.recipientName.size() <= 200))
+        && (!('recipientTitle' in data) || (data.recipientTitle is string && data.recipientTitle.size() <= 200))
+        && (!('recipientOrg' in data) || (data.recipientOrg is string && data.recipientOrg.size() <= 300))
+        && (!('recipientAddress' in data) || (data.recipientAddress is string && data.recipientAddress.size() <= 500))
+        && data.subject is string && data.subject.size() <= 500
+        && (!('salutation' in data) || (data.salutation is string && data.salutation.size() <= 200))
+        && data.body is string && data.body.size() <= 50000
+        && (!('closing' in data) || (data.closing is string && data.closing.size() <= 200))
+        && (!('signatoryName' in data) || (data.signatoryName is string && data.signatoryName.size() <= 200))
+        && (!('signatoryTitle' in data) || (data.signatoryTitle is string && data.signatoryTitle.size() <= 200))
+        && (!('signatoryDept' in data) || (data.signatoryDept is string && data.signatoryDept.size() <= 200))
+        && (!('attachments' in data) || (data.attachments is string && data.attachments.size() <= 2000))
+        && (!('ccList' in data) || (data.ccList is string && data.ccList.size() <= 2000))
+        && (!('letterheadStyle' in data) || (data.letterheadStyle in ['classic', 'modern', 'archival']))
+        && (!('letterFont' in data) || (data.letterFont in ['sutonnymj', 'serif', 'sans']))
+        && (!('showWatermark' in data) || data.showWatermark is bool)
+        && (!('showSealPlaceholder' in data) || data.showSealPlaceholder is bool)
+        && data.savedAt is string && data.savedAt.size() <= 100
+        && (!('ownerUserId' in data) || (data.ownerUserId is string && data.ownerUserId.size() <= 128))
+        && (!('ownerName' in data) || (data.ownerName is string && data.ownerName.size() <= 200))
+        && (!('department' in data) || (data.department is string && data.department.size() <= 200))
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidWorkspaceMedia(data, docId) {
+      return data.keys().hasAll(['id', 'filename', 'base64Data', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'filename', 'base64Data', 'createdAt', 'updatedAt'])
+        && isValidId(data.id)
+        && data.id == docId
+        && data.filename is string && data.filename.size() >= 1 && data.filename.size() <= 200
+        && data.base64Data is string && data.base64Data.size() >= 1 && data.base64Data.size() <= 950000
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    // Connection Validation Probe Document (Authenticated read only)
+    match /test/connection {
+      allow get: if isSignedIn();
+    }
+
+    // Admin Role Markers
+    match /admins/{userId} {
+      allow get: if isValidId(userId) && (isOwner(userId) || isBootstrappedAdmin());
+      allow create, update, delete: if isValidId(userId) && isBootstrappedAdmin();
+    }
+
+    // User Profiles & Isolated Private PII
+    match /users/{userId} {
+      allow get: if isValidId(userId) && (isOwner(userId) || isAdmin());
+      allow list: if isBootstrappedAdmin();
+      allow create: if isValidId(userId)
+        && isValidUserPublicProfile(incoming(), userId)
+        && (isOwner(userId) || isAdmin())
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && (incoming().role == 'user' || isBootstrappedAdmin());
+      allow update: if isValidId(userId)
+        && isValidUserPublicProfile(incoming(), userId)
+        && (isOwner(userId) || isAdmin())
+        && incoming().uid == existing().uid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          isAdmin() || (
+            incoming().role == existing().role
+            && incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'designation', 'department', 'updatedAt'])
+          )
+        );
+      allow delete: if isValidId(userId) && isAdmin();
+
+      match /private/{docId} {
+        allow get: if isValidId(userId) && isValidId(docId) && (isOwner(userId) || isAdmin());
+        allow create: if isValidId(userId) && isValidId(docId)
+          && isValidUserPrivateInfo(incoming(), userId)
+          && (isOwner(userId) || isAdmin())
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time;
+        allow update: if isValidId(userId) && isValidId(docId)
+          && isValidUserPrivateInfo(incoming(), userId)
+          && (isOwner(userId) || isAdmin())
+          && incoming().uid == existing().uid
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && incoming().diff(existing()).affectedKeys().hasOnly(['email', 'updatedAt']);
+        allow delete: if isValidId(userId) && isValidId(docId) && isAdmin();
+      }
+    }
+
+    // Cloud-Synced Official Letters
+    match /letters/{letterId} {
+      allow get: if isValidId(letterId) && isVerified() && (existing().ownerUid == request.auth.uid || isAdmin());
+      allow list: if isVerified() && (existing().ownerUid == request.auth.uid || isBootstrappedAdmin());
+      allow create: if isValidId(letterId)
+        && isVerified()
+        && isValidLetterDocument(incoming(), letterId)
+        && incoming().ownerUid == request.auth.uid
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isValidId(letterId)
+        && isVerified()
+        && isValidLetterDocument(incoming(), letterId)
+        && (existing().ownerUid == request.auth.uid || isAdmin())
+        && incoming().id == existing().id
+        && incoming().ownerUid == existing().ownerUid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          isAdmin() || incoming().diff(existing()).affectedKeys().hasOnly([
+            'ownerName', 'templateType', 'refNumber', 'dateText', 'subject',
+            'recipientPrefix', 'recipientName', 'recipientTitle', 'recipientOrg',
+            'recipientAddress', 'salutation', 'body', 'closing', 'signatoryName',
+            'signatoryTitle', 'signatoryDept', 'attachments', 'ccList',
+            'letterheadStyle', 'letterFont', 'department', 'updatedAt'
+          ])
+        );
+      allow delete: if isValidId(letterId) && isVerified() && (existing().ownerUid == request.auth.uid || isAdmin());
+    }
+
+    // Real-Time Gemini Live Voice Sessions
+    match /voice_sessions/{sessionId} {
+      allow get: if isValidId(sessionId) && isVerified() && (existing().ownerUid == request.auth.uid || isAdmin());
+      allow list: if isVerified() && (existing().ownerUid == request.auth.uid || isBootstrappedAdmin());
+      allow create: if isValidId(sessionId)
+        && isVerified()
+        && isValidVoiceSession(incoming(), sessionId)
+        && incoming().ownerUid == request.auth.uid
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isValidId(sessionId)
+        && isVerified()
+        && isValidVoiceSession(incoming(), sessionId)
+        && (existing().ownerUid == request.auth.uid || isAdmin())
+        && incoming().id == existing().id
+        && incoming().ownerUid == existing().ownerUid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          isAdmin() || incoming().diff(existing()).affectedKeys().hasOnly(['title', 'voiceName', 'turns', 'summary', 'updatedAt'])
+        );
+      allow delete: if isValidId(sessionId) && isVerified() && (existing().ownerUid == request.auth.uid || isAdmin());
+    }
+
+    // ================= ADMIN-ONLY SHARDED WORKSPACE VAULT =================
+    match /workspace_meta/{docId} {
+      allow get: if isValidId(docId) && isAdmin();
+      allow list: if isBootstrappedAdmin();
+      allow create: if isValidId(docId)
+        && isValidWorkspaceMeta(incoming(), docId)
+        && isAdmin()
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isValidId(docId)
+        && isValidWorkspaceMeta(incoming(), docId)
+        && isAdmin()
+        && incoming().id == existing().id
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly([
+          'revision', 'siteConfig', 'aiAssistantConfig', 'organization',
+          'departments', 'quickPhrases', 'plugins', 'userUsage', 'updatedAt'
+        ]);
+      allow delete: if isValidId(docId) && isAdmin();
+    }
+
+    match /workspace_users/{docId} {
+      allow get: if isValidId(docId) && isAdmin();
+      allow list: if isBootstrappedAdmin();
+      allow create: if isValidId(docId)
+        && isValidWorkspaceUser(incoming(), docId)
+        && isAdmin()
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isValidId(docId)
+        && isValidWorkspaceUser(incoming(), docId)
+        && isAdmin()
+        && incoming().id == existing().id
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly([
+          'userId', 'passwordHash', 'fullName', 'designation', 'department',
+          'role', 'isActive', 'avatarDataUrl', 'avatarUrl', 'userCreatedAt',
+          'lastLoginAt', 'updatedAt'
+        ]);
+      allow delete: if isValidId(docId) && isAdmin();
+    }
+
+    match /workspace_templates/{docId} {
+      allow get: if isValidId(docId) && isAdmin();
+      allow list: if isBootstrappedAdmin();
+      allow create: if isValidId(docId)
+        && isValidWorkspaceTemplate(incoming(), docId)
+        && isAdmin()
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isValidId(docId)
+        && isValidWorkspaceTemplate(incoming(), docId)
+        && isAdmin()
+        && incoming().id == existing().id
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly([
+          'title', 'category', 'summary', 'refSuffix', 'recipientPrefix',
+          'recipientName', 'recipientTitle', 'recipientOrg', 'recipientAddress',
+          'subject', 'salutation', 'body', 'closing', 'attachments', 'ccList',
+          'updatedAt'
+        ]);
+      allow delete: if isValidId(docId) && isAdmin();
+    }
+
+    match /workspace_letters/{docId} {
+      allow get: if isValidId(docId) && isAdmin();
+      allow list: if isBootstrappedAdmin();
+      allow create: if isValidId(docId)
+        && isValidWorkspaceLetter(incoming(), docId)
+        && isAdmin()
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isValidId(docId)
+        && isValidWorkspaceLetter(incoming(), docId)
+        && isAdmin()
+        && incoming().id == existing().id
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly([
+          'templateType', 'refNumber', 'dateText', 'showBanglaDate',
+          'banglaDateText', 'recipientPrefix', 'recipientName', 'recipientTitle',
+          'recipientOrg', 'recipientAddress', 'subject', 'salutation', 'body',
+          'closing', 'signatoryName', 'signatoryTitle', 'signatoryDept',
+          'attachments', 'ccList', 'letterheadStyle', 'letterFont',
+          'showWatermark', 'showSealPlaceholder', 'savedAt', 'ownerUserId',
+          'ownerName', 'department', 'updatedAt'
+        ]);
+      allow delete: if isValidId(docId) && isAdmin();
+    }
+
+    match /workspace_media/{docId} {
+      allow get: if isValidId(docId) && isAdmin();
+      allow list: if isBootstrappedAdmin();
+      allow create: if isValidId(docId)
+        && isValidWorkspaceMedia(incoming(), docId)
+        && isAdmin()
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isValidId(docId)
+        && isValidWorkspaceMedia(incoming(), docId)
+        && isAdmin()
+        && incoming().id == existing().id
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly([
+          'filename', 'base64Data', 'updatedAt'
+        ]);
+      allow delete: if isValidId(docId) && isAdmin();
+    }
+  }
+}

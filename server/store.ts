@@ -2,13 +2,16 @@ import crypto from "crypto";
 import fs from "fs";
 import path from "path";
 import {
+  DEFAULT_AI_ASSISTANT_CONFIG,
   DEFAULT_DEPARTMENTS,
   DEFAULT_ORGANIZATION,
+  DEFAULT_PLUGINS,
   DEFAULT_QUICK_PHRASES,
   DEFAULT_SITE_CONFIG,
   LETTER_TEMPLATES,
 } from "../src/data/templates.ts";
 import type {
+  AiAssistantConfig,
   DepartmentItem,
   LetterTemplate,
   OrganizationProfile,
@@ -16,7 +19,9 @@ import type {
   QuickPhrase,
   SavedLetter,
   SiteConfig,
+  SitePlugin,
   UserRole,
+  UserUsageProfile,
 } from "../src/types.ts";
 
 export interface StoredUser extends PublicUser {
@@ -24,18 +29,45 @@ export interface StoredUser extends PublicUser {
 }
 
 export interface AppDatabase {
+  schemaVersion: number;
+  revision: number;
+  updatedAt?: string;
   sessionSecret: string;
   siteConfig: SiteConfig;
+  aiAssistantConfig: AiAssistantConfig;
   organization: OrganizationProfile;
   departments: DepartmentItem[];
   templates: LetterTemplate[];
   quickPhrases: QuickPhrase[];
+  plugins: SitePlugin[];
+  userUsage: Record<string, UserUsageProfile>;
   users: StoredUser[];
   letters: SavedLetter[];
 }
 
+const CURRENT_SCHEMA_VERSION = 5;
 const DATA_DIR = path.resolve(process.cwd(), "data");
+const MEDIA_DIR = path.join(DATA_DIR, "media");
 const DB_PATH = path.join(DATA_DIR, "app-store.json");
+
+export function emptyUsageProfile(): UserUsageProfile {
+  return {
+    templateCounts: {},
+    pinnedTemplateIds: [],
+    recentTemplateIds: [],
+  };
+}
+
+export function getUserUsage(
+  db: AppDatabase,
+  userId: string
+): UserUsageProfile {
+  if (!db.userUsage) db.userUsage = {};
+  if (!db.userUsage[userId]) {
+    db.userUsage[userId] = emptyUsageProfile();
+  }
+  return db.userUsage[userId];
+}
 
 export function hashPassword(password: string): string {
   const salt = crypto.randomBytes(16).toString("hex");
@@ -56,12 +88,21 @@ export function verifyPassword(password: string, storedHash: string): boolean {
 function createInitialDb(): AppDatabase {
   const now = new Date().toISOString();
   return {
+    schemaVersion: CURRENT_SCHEMA_VERSION,
+    revision: 0,
+    updatedAt: now,
     sessionSecret: crypto.randomBytes(32).toString("hex"),
     siteConfig: { ...DEFAULT_SITE_CONFIG },
+    aiAssistantConfig: {
+      ...DEFAULT_AI_ASSISTANT_CONFIG,
+      quickCommands: [...DEFAULT_AI_ASSISTANT_CONFIG.quickCommands],
+    },
     organization: { ...DEFAULT_ORGANIZATION },
     departments: DEFAULT_DEPARTMENTS.map((d) => ({ ...d })),
     templates: LETTER_TEMPLATES.map((t) => ({ ...t })),
     quickPhrases: DEFAULT_QUICK_PHRASES.map((p) => ({ ...p })),
+    plugins: DEFAULT_PLUGINS.map((pl) => ({ ...pl, config: { ...pl.config } })),
+    userUsage: {},
     users: [
       {
         id: "usr-admin-1",
@@ -92,7 +133,64 @@ export function getDb(): AppDatabase {
       const raw = fs.readFileSync(DB_PATH, "utf-8");
       const parsed = JSON.parse(raw) as Partial<AppDatabase>;
       const fallback = createInitialDb();
+      const loadedSchema = parsed.schemaVersion || 1;
+
+      const departments =
+        Array.isArray(parsed.departments) && parsed.departments.length > 0
+          ? [...parsed.departments]
+          : fallback.departments;
+
+      const templates =
+        Array.isArray(parsed.templates) && parsed.templates.length > 0
+          ? [...parsed.templates]
+          : fallback.templates;
+
+      const plugins =
+        Array.isArray(parsed.plugins) && parsed.plugins.length > 0
+          ? [...parsed.plugins]
+          : fallback.plugins;
+
+      let migrated = false;
+      if (loadedSchema < CURRENT_SCHEMA_VERSION) {
+        migrated = true;
+        // Ensure Audit department exists on upgrade
+        const auditDept = DEFAULT_DEPARTMENTS.find(
+          (d) => d.id === "dept-audit"
+        );
+        if (
+          auditDept &&
+          !departments.some(
+            (d) => d.id === auditDept.id || d.name === auditDept.name
+          )
+        ) {
+          departments.splice(1, 0, { ...auditDept });
+        }
+
+        // Seed Audit templates if not already present
+        for (const tpl of LETTER_TEMPLATES) {
+          if (
+            tpl.id.startsWith("tpl-audit-") &&
+            !templates.some((t) => t.id === tpl.id)
+          ) {
+            templates.push({ ...tpl });
+          }
+        }
+
+        // Ensure all built-in plugins exist
+        for (const pl of DEFAULT_PLUGINS) {
+          if (!plugins.some((existing) => existing.id === pl.id)) {
+            plugins.push({ ...pl, config: { ...pl.config } });
+          }
+        }
+      }
+
       cachedDb = {
+        schemaVersion: CURRENT_SCHEMA_VERSION,
+        revision: typeof parsed.revision === "number" ? parsed.revision : 0,
+        updatedAt:
+          typeof parsed.updatedAt === "string"
+            ? parsed.updatedAt
+            : fallback.updatedAt,
         sessionSecret: parsed.sessionSecret || fallback.sessionSecret,
         siteConfig: {
           ...fallback.siteConfig,
@@ -104,26 +202,50 @@ export function getDb(): AppDatabase {
           customLinks: Array.isArray(parsed.siteConfig?.customLinks)
             ? parsed.siteConfig.customLinks
             : fallback.siteConfig.customLinks,
+          uiTexts: {
+            ...(fallback.siteConfig.uiTexts || {}),
+            ...(parsed.siteConfig?.uiTexts && typeof parsed.siteConfig.uiTexts === "object"
+              ? parsed.siteConfig.uiTexts
+              : {}),
+          },
+          uiBlocks: Array.isArray(parsed.siteConfig?.uiBlocks)
+            ? parsed.siteConfig.uiBlocks
+            : [],
+          customBlocks: Array.isArray(parsed.siteConfig?.customBlocks)
+            ? parsed.siteConfig.customBlocks
+            : [],
         },
-        organization: { ...fallback.organization, ...(parsed.organization || {}) },
-        departments:
-          Array.isArray(parsed.departments) && parsed.departments.length > 0
-            ? parsed.departments
-            : fallback.departments,
-        templates:
-          Array.isArray(parsed.templates) && parsed.templates.length > 0
-            ? parsed.templates
-            : fallback.templates,
-        quickPhrases:
-          Array.isArray(parsed.quickPhrases)
-            ? parsed.quickPhrases
-            : fallback.quickPhrases,
+        aiAssistantConfig: {
+          ...fallback.aiAssistantConfig,
+          ...(parsed.aiAssistantConfig || {}),
+          quickCommands: Array.isArray(parsed.aiAssistantConfig?.quickCommands)
+            ? parsed.aiAssistantConfig.quickCommands
+            : fallback.aiAssistantConfig.quickCommands,
+        },
+        organization: {
+          ...fallback.organization,
+          ...(parsed.organization || {}),
+        },
+        departments,
+        templates,
+        quickPhrases: Array.isArray(parsed.quickPhrases)
+          ? parsed.quickPhrases
+          : fallback.quickPhrases,
+        plugins,
+        userUsage:
+          parsed.userUsage && typeof parsed.userUsage === "object"
+            ? parsed.userUsage
+            : {},
         users:
           Array.isArray(parsed.users) && parsed.users.length > 0
             ? parsed.users
             : fallback.users,
         letters: Array.isArray(parsed.letters) ? parsed.letters : [],
       };
+
+      if (migrated) {
+        saveDb(cachedDb, { bumpRevision: false });
+      }
       return cachedDb;
     }
   } catch (err) {
@@ -131,11 +253,19 @@ export function getDb(): AppDatabase {
   }
 
   cachedDb = createInitialDb();
-  saveDb(cachedDb);
+  saveDb(cachedDb, { bumpRevision: false });
   return cachedDb;
 }
 
-export function saveDb(db: AppDatabase): void {
+export function saveDb(
+  db: AppDatabase,
+  options?: { bumpRevision?: boolean }
+): void {
+  const bumpRevision = options?.bumpRevision !== false;
+  if (bumpRevision) {
+    db.revision = (typeof db.revision === "number" ? db.revision : 0) + 1;
+    db.updatedAt = new Date().toISOString();
+  }
   cachedDb = db;
   if (!fs.existsSync(DATA_DIR)) {
     fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -199,5 +329,138 @@ export function verifySessionToken(token: string): StoredUser | null {
     return user || null;
   } catch {
     return null;
+  }
+}
+
+export function filterTemplatesForUser(
+  db: AppDatabase,
+  user: StoredUser
+): LetterTemplate[] {
+  if (user.role === "admin") {
+    return db.templates;
+  }
+
+  const accessPlugin = db.plugins.find((p) => p.type === "template-access");
+  if (!accessPlugin || !accessPlugin.enabled) {
+    return db.templates;
+  }
+
+  const rules = accessPlugin.config?.userTemplateRules || {};
+  const userRule = rules[user.userId];
+  const enforceDefault = accessPlugin.config?.enforceDepartmentDefault !== false;
+  const mode = userRule?.mode || (enforceDefault ? "department" : "all");
+
+  if (mode === "all") {
+    return db.templates;
+  }
+
+  if (mode === "custom") {
+    const allowedCats = new Set(userRule?.allowedCategories || []);
+    const allowedIds = new Set(userRule?.allowedTemplateIds || []);
+    return db.templates.filter(
+      (tpl) => allowedCats.has(tpl.category) || allowedIds.has(tpl.id)
+    );
+  }
+
+  // Default: department-scoped visibility
+  if (!user.department || user.department === "সকল বিভাগ") {
+    return db.templates;
+  }
+  return db.templates.filter((tpl) => tpl.category === user.department);
+}
+
+interface AiUndoEntry {
+  id: string;
+  createdAt: string;
+  snapshotJson: string;
+}
+
+const aiUndoStack: AiUndoEntry[] = [];
+
+export function createAiUndoSnapshot(db: AppDatabase): string {
+  const id = `undo-${Date.now()}-${crypto.randomBytes(3).toString("hex")}`;
+  aiUndoStack.unshift({
+    id,
+    createdAt: new Date().toISOString(),
+    snapshotJson: JSON.stringify(db),
+  });
+  if (aiUndoStack.length > 15) {
+    aiUndoStack.length = 15;
+  }
+  return id;
+}
+
+export function restoreAiUndoSnapshot(snapshotId: string): AppDatabase | null {
+  const idx = aiUndoStack.findIndex((item) => item.id === snapshotId);
+  if (idx === -1) return null;
+  const entry = aiUndoStack[idx];
+  const parsed = JSON.parse(entry.snapshotJson) as AppDatabase;
+  aiUndoStack.splice(idx, 1);
+  saveDb(parsed);
+  return parsed;
+}
+
+export function sanitizeSvgMarkup(rawSvg: string): string {
+  let clean = rawSvg
+    .replace(/<script[\s\S]*?<\/script>/gi, "")
+    .replace(/<foreignObject[\s\S]*?<\/foreignObject>/gi, "")
+    .replace(/\son[a-z]+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi, "")
+    .replace(/javascript:/gi, "");
+  const svgStart = clean.search(/<svg[\s>]/i);
+  const svgEnd = clean.lastIndexOf("</svg>");
+  if (svgStart === -1 || svgEnd === -1) return "";
+  clean = clean.slice(svgStart, svgEnd + 6).trim();
+  if (!/xmlns\s*=/i.test(clean)) {
+    clean = clean.replace(/<svg/i, '<svg xmlns="http://www.w3.org/2000/svg"');
+  }
+  return clean;
+}
+
+export function saveMediaBuffer(buffer: Buffer, ext: string): string {
+  if (!fs.existsSync(MEDIA_DIR)) {
+    fs.mkdirSync(MEDIA_DIR, { recursive: true });
+  }
+  const safeExt = ext.replace(/[^a-z0-9]/gi, "").toLowerCase() || "png";
+  const filename = `media-${Date.now()}-${crypto.randomBytes(4).toString("hex")}.${safeExt}`;
+  fs.writeFileSync(path.join(MEDIA_DIR, filename), buffer);
+  return `/api/media/${filename}`;
+}
+
+export function saveSvgMedia(rawSvg: string): string {
+  const clean = sanitizeSvgMarkup(rawSvg);
+  if (!clean) {
+    throw new Error("Invalid SVG markup");
+  }
+  return saveMediaBuffer(Buffer.from(clean, "utf-8"), "svg");
+}
+
+export function getMediaFilePath(filename: string): string | null {
+  if (!/^[a-zA-Z0-9_-]+\.(png|jpg|jpeg|webp|gif|svg)$/.test(filename)) {
+    return null;
+  }
+  const fullPath = path.join(MEDIA_DIR, filename);
+  return fs.existsSync(fullPath) ? fullPath : null;
+}
+
+export function exportMediaFilesForBackup(): Record<string, string> {
+  const result: Record<string, string> = {};
+  if (!fs.existsSync(MEDIA_DIR)) return result;
+  for (const name of fs.readdirSync(MEDIA_DIR)) {
+    if (!/^[a-zA-Z0-9_-]+\.(png|jpg|jpeg|webp|gif|svg)$/.test(name)) continue;
+    const buf = fs.readFileSync(path.join(MEDIA_DIR, name));
+    result[name] = buf.toString("base64");
+  }
+  return result;
+}
+
+export function restoreMediaFilesFromBackup(files: unknown): void {
+  if (!files || typeof files !== "object") return;
+  if (!fs.existsSync(MEDIA_DIR)) {
+    fs.mkdirSync(MEDIA_DIR, { recursive: true });
+  }
+  for (const [name, b64] of Object.entries(files as Record<string, unknown>)) {
+    if (!/^[a-zA-Z0-9_-]+\.(png|jpg|jpeg|webp|gif|svg)$/.test(name)) continue;
+    if (typeof b64 !== "string" || !b64) continue;
+    fs.writeFileSync(path.join(MEDIA_DIR, name), Buffer.from(b64, "base64"));
   }
 }

@@ -19,7 +19,11 @@ export const LetterPreview: React.FC<LetterPreviewProps> = ({
 }) => {
   const brandColor = org.brandColor || "#1E3A8A";
   const fontClass =
-    letter.letterFont === "serif" ? "font-letter-serif" : "font-letter-sans";
+    letter.letterFont === "sutonnymj"
+      ? "font-letter-sutonny"
+      : letter.letterFont === "serif"
+        ? "font-letter-serif"
+        : "font-letter-sans";
 
   const sheetRef = useRef<HTMLDivElement | null>(null);
   const scaleBoxRef = useRef<HTMLDivElement | null>(null);
@@ -153,7 +157,7 @@ export const LetterPreview: React.FC<LetterPreviewProps> = ({
                     {org.nameBn || "প্রতিষ্ঠানের নাম"}
                   </h1>
                   {org.nameEn && (
-                    <p className="text-[8pt] tracking-[0.14em] uppercase text-stone-500 mt-0.5 font-ui">
+                    <p className="text-[8pt] tracking-[0.14em] uppercase text-stone-500 mt-0.5 font-letter-sans">
                       {org.nameEn}
                     </p>
                   )}
@@ -162,7 +166,7 @@ export const LetterPreview: React.FC<LetterPreviewProps> = ({
                   )}
                 </div>
               </div>
-              <div className="text-right text-[8.5pt] text-stone-600 leading-snug max-w-[66mm] font-ui">
+              <div className="text-right text-[8.5pt] text-stone-600 leading-snug max-w-[66mm] font-letter-sans">
                 {org.address && <p>{org.address}</p>}
                 {org.phone && <p className="tabular-nums">ফোন: {org.phone}</p>}
                 {org.email && <p>{org.email}</p>}
@@ -184,14 +188,14 @@ export const LetterPreview: React.FC<LetterPreviewProps> = ({
                   {org.nameBn || "প্রতিষ্ঠানের নাম"}
                 </h1>
                 {org.nameEn && (
-                  <p className="text-[8pt] tracking-[0.16em] uppercase text-stone-500 mt-0.5 font-ui">
+                  <p className="text-[8pt] tracking-[0.16em] uppercase text-stone-500 mt-0.5 font-letter-sans">
                     {org.nameEn}
                   </p>
                 )}
                 {org.tagline && (
                   <p className="text-[9.5pt] text-stone-700 mt-0.5">{org.tagline}</p>
                 )}
-                <div className="mt-1 flex flex-wrap items-center justify-center gap-x-2.5 gap-y-0.5 text-[8.5pt] text-stone-600 font-ui">
+                <div className="mt-1 flex flex-wrap items-center justify-center gap-x-2.5 gap-y-0.5 text-[8.5pt] text-stone-600 font-letter-sans">
                   {org.address && <span>{org.address}</span>}
                   {org.regNumber && (
                     <>
@@ -215,7 +219,7 @@ export const LetterPreview: React.FC<LetterPreviewProps> = ({
           )}
 
           {/* REFERENCE NUMBER & DATE ROW */}
-          <div className="mt-3 flex items-start justify-between gap-4 text-[10pt]">
+          <div className="mt-3 flex items-start justify-between gap-4 text-[10.5pt]">
             <div className="tabular-nums">
               <span className="font-semibold text-stone-800">স্মারক নং: </span>
               <span className="text-stone-900">{letter.refNumber || "—"}</span>
@@ -226,7 +230,7 @@ export const LetterPreview: React.FC<LetterPreviewProps> = ({
                 <span className="text-stone-900">{letter.dateText}</span>
               </div>
               {letter.showBanglaDate && letter.banglaDateText && (
-                <div className="text-[8.5pt] text-stone-600">
+                <div className="text-[9pt] text-stone-600">
                   {letter.banglaDateText}
                 </div>
               )}
@@ -238,7 +242,7 @@ export const LetterPreview: React.FC<LetterPreviewProps> = ({
             letter.recipientTitle ||
             letter.recipientOrg ||
             letter.recipientAddress) && (
-            <div className="mt-4 text-[10.5pt] leading-[1.5] text-stone-900">
+            <div className="mt-4 text-[11pt] leading-[1.52] text-stone-900">
               {letter.recipientPrefix && (
                 <p className="font-semibold text-stone-800">
                   {letter.recipientPrefix},
@@ -255,7 +259,7 @@ export const LetterPreview: React.FC<LetterPreviewProps> = ({
 
           {/* SUBJECT LINE */}
           {letter.subject && (
-            <div className="mt-4 text-[11pt] leading-[1.45] text-stone-950">
+            <div className="mt-4 text-[12pt] leading-[1.48] text-stone-950">
               <span className="font-bold">বিষয়: </span>
               <span className="font-bold underline decoration-stone-400 underline-offset-4">
                 {letter.subject}
@@ -265,13 +269,13 @@ export const LetterPreview: React.FC<LetterPreviewProps> = ({
 
           {/* SALUTATION */}
           {letter.salutation && (
-            <div className="mt-3.5 text-[10.5pt] text-stone-900">
+            <div className="mt-3.5 text-[11pt] text-stone-900">
               {letter.salutation}
             </div>
           )}
 
           {/* MAIN LETTER BODY */}
-          <div className="mt-2.5 space-y-2.5 text-[10.5pt] leading-[1.68] text-stone-900 text-justify">
+          <div className="mt-2.5 space-y-2.5 text-[11.5pt] leading-[1.68] text-stone-900 text-justify">
             {bodyParagraphs.length > 0 ? (
               bodyParagraphs.map((para, idx) => (
                 <p key={idx} className="whitespace-pre-line">
@@ -280,7 +284,7 @@ export const LetterPreview: React.FC<LetterPreviewProps> = ({
               ))
             ) : (
               <p className="text-stone-400 italic">
-                এখানে আপনার চিঠির মূল বক্তব্য প্রদর্শিত হবে...
+                এখানে আপনার পত্রের মূল বক্তব্য প্রদর্শিত হবে...
               </p>
             )}
           </div>
@@ -289,7 +293,7 @@ export const LetterPreview: React.FC<LetterPreviewProps> = ({
           <div className="mt-6 flex items-end justify-between gap-8">
             <div>
               {letter.showSealPlaceholder && (
-                <div className="w-[32mm] h-[18mm] border border-dashed border-stone-300 flex items-center justify-center text-[8pt] text-stone-400 font-ui">
+                <div className="w-[32mm] h-[18mm] border border-dashed border-stone-300 flex items-center justify-center text-[8.5pt] text-stone-400 font-letter-sans">
                   প্রতিষ্ঠানের সীল
                 </div>
               )}
@@ -297,7 +301,7 @@ export const LetterPreview: React.FC<LetterPreviewProps> = ({
 
             <div className="min-w-[54mm] text-center">
               {letter.closing && (
-                <p className="text-[10pt] text-stone-800 mb-2 text-left">
+                <p className="text-[10.5pt] text-stone-800 mb-2 text-left">
                   {letter.closing}
                 </p>
               )}
@@ -314,18 +318,18 @@ export const LetterPreview: React.FC<LetterPreviewProps> = ({
                 )}
               </div>
               {letter.signatoryName && (
-                <p className="text-[10.5pt] font-bold text-stone-950">
+                <p className="text-[11pt] font-bold text-stone-950">
                   {letter.signatoryName}
                 </p>
               )}
               {letter.signatoryTitle && (
-                <p className="text-[9pt] text-stone-700">{letter.signatoryTitle}</p>
+                <p className="text-[9.5pt] text-stone-700">{letter.signatoryTitle}</p>
               )}
               {letter.signatoryDept && (
-                <p className="text-[8.5pt] text-stone-600">{letter.signatoryDept}</p>
+                <p className="text-[9pt] text-stone-600">{letter.signatoryDept}</p>
               )}
               {org.nameBn && (
-                <p className="text-[8.5pt] font-medium text-stone-700 mt-0.5">
+                <p className="text-[9pt] font-medium text-stone-700 mt-0.5">
                   {org.nameBn}
                 </p>
               )}
@@ -334,7 +338,7 @@ export const LetterPreview: React.FC<LetterPreviewProps> = ({
 
           {/* ATTACHMENTS & CC */}
           {(attachmentLines.length > 0 || ccLines.length > 0) && (
-            <div className="mt-5 pt-2.5 border-t border-stone-200 grid grid-cols-1 gap-2 text-[9pt] leading-snug text-stone-700">
+            <div className="mt-5 pt-2.5 border-t border-stone-200 grid grid-cols-1 gap-2 text-[9.5pt] leading-snug text-stone-700">
               {attachmentLines.length > 0 && (
                 <div>
                   <p className="font-bold text-stone-900 mb-0.5">সংযুক্তি:</p>
@@ -346,7 +350,7 @@ export const LetterPreview: React.FC<LetterPreviewProps> = ({
               {ccLines.length > 0 && (
                 <div>
                   <p className="font-bold text-stone-900 mb-0.5">
-                    অনুলিপি সদয় অবগতি ও প্রয়োজনীয় ব্যবস্থা গ্রহণের জন্য:
+                    অনুলিপি (সদয় অবগতি ও প্রয়োজনীয় কার্যার্থে):
                   </p>
                   {ccLines.map((line, i) => (
                     <p key={i}>{line}</p>
@@ -360,7 +364,7 @@ export const LetterPreview: React.FC<LetterPreviewProps> = ({
         {/* LETTERHEAD FOOTER */}
         <footer
           ref={footerRef}
-          className="mt-4 pt-2 border-t border-stone-200 flex flex-wrap items-center justify-between gap-2 text-[8pt] text-stone-500 font-ui"
+          className="mt-4 pt-2 border-t border-stone-200 flex flex-wrap items-center justify-between gap-2 text-[8.5pt] text-stone-500 font-letter-sans"
         >
           <div className="flex flex-wrap items-center gap-x-2.5 gap-y-0.5">
             {org.phone && <span className="tabular-nums">ফোন: {org.phone}</span>}
