@@ -26,6 +26,7 @@ import {
   OfficeFontMode,
   OrganizationProfile,
   QuickPhrase,
+  SitePlugin,
 } from "../types";
 import { apiRequest } from "../utils/api";
 import {
@@ -35,6 +36,11 @@ import {
   generateNextRefNumber,
   toBengaliDigits,
 } from "../utils/bengali";
+import {
+  getBranchPadMap,
+  isBranchPadPluginEnabled,
+  resolveBranchPadForLetter,
+} from "../utils/branchPad";
 import {
   createPrintableHtmlUrl,
   exportLetterToExcel,
@@ -49,6 +55,8 @@ interface EditorViewProps {
   templates: LetterTemplate[];
   departments: DepartmentItem[];
   quickPhrases: QuickPhrase[];
+  plugins?: SitePlugin[];
+  userDepartment?: string;
   pluginSnippets?: { id: string; name: string; text: string }[];
   allowAiDrafting: boolean;
   isSavedOnServer?: boolean;
@@ -99,6 +107,7 @@ const TRACKED_FIELD_LABELS: { key: keyof LetterData; label: string }[] = [
   { key: "letterFont", label: "মুদ্রণ ফন্ট" },
   { key: "showWatermark", label: "প্রতীক ও লোগো" },
   { key: "showSealPlaceholder", label: "সীলমোহর বক্স" },
+  { key: "branchPadDepartment", label: "শাখার প্যাড" },
 ];
 
 function diffLetterFields(prev: LetterData, next: LetterData): string[] {
@@ -133,6 +142,8 @@ export const EditorView: React.FC<EditorViewProps> = ({
   templates,
   departments,
   quickPhrases,
+  plugins = [],
+  userDepartment,
   pluginSnippets = [],
   allowAiDrafting,
   isSavedOnServer = false,
@@ -637,6 +648,17 @@ export const EditorView: React.FC<EditorViewProps> = ({
   const uncategorizedTemplates = templates.filter(
     (t) => !departmentNames.includes(t.category)
   );
+  const branchPadEnabled = isBranchPadPluginEnabled(plugins);
+  const branchPadMap = getBranchPadMap(plugins);
+  const configuredBranchPadNames = Object.keys(branchPadMap).filter(
+    (dept) => branchPadMap[dept]?.enabled !== false
+  );
+  const activeBranchPad = resolveBranchPadForLetter({
+    plugins,
+    letter,
+    templates,
+    userDepartment,
+  });
 
   return (
     <div className="print-reset-container max-w-[1440px] mx-auto px-4 sm:px-6 lg:px-8 py-6">
@@ -1228,6 +1250,67 @@ export const EditorView: React.FC<EditorViewProps> = ({
 
             {subTab === "design" && (
               <>
+                {branchPadEnabled && configuredBranchPadNames.length > 0 && (
+                  <div className="p-3.5 rounded-lg border border-[#1E3A8A]/20 bg-[#1E3A8A]/5 space-y-2">
+                    <label
+                      htmlFor="editor-branch-pad-select"
+                      className="block text-xs font-semibold text-stone-900"
+                    >
+                      শাখাভিত্তিক প্যাড ও নিচের স্বাক্ষরকারী নির্বাচন
+                    </label>
+                    <select
+                      id="editor-branch-pad-select"
+                      name="branchPadDepartment"
+                      value={letter.branchPadDepartment || ""}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        const chosen =
+                          val && val !== "__default__" ? branchPadMap[val] : undefined;
+                        onChange({
+                          ...letter,
+                          branchPadDepartment: val || undefined,
+                          ...(chosen?.letterheadStyle
+                            ? { letterheadStyle: chosen.letterheadStyle }
+                            : {}),
+                          ...(chosen?.letterFont
+                            ? { letterFont: chosen.letterFont }
+                            : {}),
+                        });
+                      }}
+                      className="w-full h-10 rounded-lg border border-stone-300 bg-white px-3 text-xs font-medium text-stone-900 focus:outline-none focus:border-[#1E3A8A]"
+                    >
+                      <option value="">
+                        স্বয়ংক্রিয় (টেমপ্লেট বা ব্যবহারকারীর শাখা অনুযায়ী)
+                      </option>
+                      {configuredBranchPadNames.map((deptName) => {
+                        const sigCount =
+                          branchPadMap[deptName]?.signatories?.length || 0;
+                        return (
+                          <option key={deptName} value={deptName}>
+                            {deptName} ({toBengaliDigits(sigCount)} জন স্বাক্ষরকারী)
+                          </option>
+                        );
+                      })}
+                      <option value="__default__">
+                        প্রতিষ্ঠানের মূল প্যাড (একক স্বাক্ষরকারী)
+                      </option>
+                    </select>
+                    {activeBranchPad && (
+                      <p className="text-[11px] text-stone-700 leading-relaxed">
+                        সক্রিয় প্যাড:{" "}
+                        <span className="font-semibold">
+                          {activeBranchPad.config.branchTitleBn ||
+                            activeBranchPad.departmentName}
+                        </span>
+                        {activeBranchPad.config.signatories.length > 0 &&
+                          ` · নিচে ${toBengaliDigits(
+                            activeBranchPad.config.signatories.length
+                          )} জন স্বাক্ষরকারী প্রদর্শিত হচ্ছে।`}
+                      </p>
+                    )}
+                  </div>
+                )}
+
                 <div className="space-y-3">
                   <div>
                     <label
@@ -1643,6 +1726,7 @@ export const EditorView: React.FC<EditorViewProps> = ({
                 <LetterPreview
                   letter={letter}
                   org={org}
+                  branchPad={activeBranchPad?.config || null}
                   exportRef={exportRef}
                   autoFitOnePage={true}
                   onFitScaleChange={setFitScale}

@@ -76,7 +76,7 @@ service cloud.firestore {
           'recipientOrg', 'recipientAddress', 'salutation', 'body', 'closing',
           'signatoryName', 'signatoryTitle', 'signatoryDept', 'attachments',
           'ccList', 'letterheadStyle', 'letterFont', 'department',
-          'createdAt', 'updatedAt'
+          'branchPadDepartment', 'createdAt', 'updatedAt'
         ])
         && isValidId(data.id)
         && data.id == letterId
@@ -102,6 +102,7 @@ service cloud.firestore {
         && (!('letterheadStyle' in data) || (data.letterheadStyle in ['classic', 'modern', 'archival']))
         && (!('letterFont' in data) || (data.letterFont in ['sutonnymj', 'serif', 'sans']))
         && (!('department' in data) || (data.department is string && data.department.size() <= 120))
+        && (!('branchPadDepartment' in data) || (data.branchPadDepartment is string && data.branchPadDepartment.size() <= 200))
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
     }
@@ -215,7 +216,7 @@ service cloud.firestore {
           'closing', 'signatoryName', 'signatoryTitle', 'signatoryDept',
           'attachments', 'ccList', 'letterheadStyle', 'letterFont',
           'showWatermark', 'showSealPlaceholder', 'savedAt', 'ownerUserId',
-          'ownerName', 'department', 'createdAt', 'updatedAt'
+          'ownerName', 'department', 'branchPadDepartment', 'createdAt', 'updatedAt'
         ])
         && isValidId(data.id)
         && data.id == docId
@@ -246,6 +247,7 @@ service cloud.firestore {
         && (!('ownerUserId' in data) || (data.ownerUserId is string && data.ownerUserId.size() <= 128))
         && (!('ownerName' in data) || (data.ownerName is string && data.ownerName.size() <= 200))
         && (!('department' in data) || (data.department is string && data.department.size() <= 200))
+        && (!('branchPadDepartment' in data) || (data.branchPadDepartment is string && data.branchPadDepartment.size() <= 200))
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
     }
@@ -338,7 +340,7 @@ service cloud.firestore {
             'recipientPrefix', 'recipientName', 'recipientTitle', 'recipientOrg',
             'recipientAddress', 'salutation', 'body', 'closing', 'signatoryName',
             'signatoryTitle', 'signatoryDept', 'attachments', 'ccList',
-            'letterheadStyle', 'letterFont', 'department', 'updatedAt'
+            'letterheadStyle', 'letterFont', 'department', 'branchPadDepartment', 'updatedAt'
           ])
         );
       allow delete: if isValidId(letterId) && isVerified() && (existing().ownerUid == request.auth.uid || isAdmin());
@@ -456,7 +458,7 @@ service cloud.firestore {
           'closing', 'signatoryName', 'signatoryTitle', 'signatoryDept',
           'attachments', 'ccList', 'letterheadStyle', 'letterFont',
           'showWatermark', 'showSealPlaceholder', 'savedAt', 'ownerUserId',
-          'ownerName', 'department', 'updatedAt'
+          'ownerName', 'department', 'branchPadDepartment', 'updatedAt'
         ]);
       allow delete: if isValidId(docId) && isAdmin();
     }

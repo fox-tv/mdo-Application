@@ -46,6 +46,7 @@ import {
   formatBengaliDate,
   generateNextRefNumber,
 } from "./utils/bengali";
+import { resolveBranchPadForDepartment } from "./utils/branchPad";
 import {
   auth,
   deleteLetterFromCloud,
@@ -60,9 +61,11 @@ import {
   loadFullWorkspaceFromFirestore,
   loadLocalSafetySnapshot,
   loadUserLettersSafetySnapshot,
+  loadUserTemplatesSafetySnapshot,
   saveFullWorkspaceToFirestore,
   saveLocalSafetySnapshot,
   saveUserLettersSafetySnapshot,
+  saveUserTemplatesSafetySnapshot,
   type FullWorkspaceBackup,
 } from "./lib/workspaceVault";
 import { EditorView } from "./components/EditorView";
@@ -262,12 +265,16 @@ export default function App() {
   const [passMsg, setPassMsg] = useState("");
   const [passErr, setPassErr] = useState("");
   const [isChangingPass, setIsChangingPass] = useState(false);
+  const [cloudSyncError, setCloudSyncError] = useState("");
+  const [cloudConnecting, setCloudConnecting] = useState(false);
+  const [reconcileNonce, setReconcileNonce] = useState(0);
 
   const userMenuRef = useRef<HTMLDivElement | null>(null);
   const serverRevisionRef = useRef<number>(0);
   const reconcileKeyRef = useRef<string>("");
   const localRestoreTriedRef = useRef<boolean>(false);
   const userLettersRestoredRef = useRef<string>("");
+  const userTemplatesRestoredRef = useRef<string>("");
   const autoResumeTriedRef = useRef<boolean>(false);
   const syncTimerRef = useRef<number | null>(null);
   const userRef = useRef<PublicUser | null>(null);
@@ -284,9 +291,13 @@ export default function App() {
       await saveLocalSafetySnapshot(backup);
       if (isVerifiedCloudAdmin(firebaseUserRef.current)) {
         await saveFullWorkspaceToFirestore(backup);
+        setCloudSyncError("");
       }
     } catch (err) {
       console.error("Workspace vault sync error:", err);
+      if (isVerifiedCloudAdmin(firebaseUserRef.current)) {
+        setCloudSyncError("ক্লাউড ডাটা সিঙ্ক করতে সমস্যা হয়েছে।");
+      }
     }
   }, []);
 
@@ -297,16 +308,34 @@ export default function App() {
     syncTimerRef.current = window.setTimeout(() => {
       syncTimerRef.current = null;
       void syncCurrentWorkspaceToVault();
-    }, 400);
+    }, 150);
   }, [syncCurrentWorkspaceToVault]);
 
   useEffect(() => {
+    const flushPendingVaultSync = () => {
+      if (syncTimerRef.current !== null) {
+        window.clearTimeout(syncTimerRef.current);
+        syncTimerRef.current = null;
+        void syncCurrentWorkspaceToVault();
+      }
+    };
+    const handleVisibility = () => {
+      if (document.visibilityState === "hidden") {
+        flushPendingVaultSync();
+      }
+    };
+    document.addEventListener("visibilitychange", handleVisibility);
+    window.addEventListener("pagehide", flushPendingVaultSync);
+    window.addEventListener("beforeunload", flushPendingVaultSync);
     return () => {
+      document.removeEventListener("visibilitychange", handleVisibility);
+      window.removeEventListener("pagehide", flushPendingVaultSync);
+      window.removeEventListener("beforeunload", flushPendingVaultSync);
       if (syncTimerRef.current !== null) {
         window.clearTimeout(syncTimerRef.current);
       }
     };
-  }, []);
+  }, [syncCurrentWorkspaceToVault]);
 
   const loadBootstrap = useCallback(async () => {
     try {
@@ -324,12 +353,11 @@ export default function App() {
         const ws = data.workspace;
         serverRevisionRef.current = ws.revision ?? 0;
 
-        // If server restarted cleanly (revision === 0) and admin has a newer IndexedDB safety snapshot
-        // while Google Cloud isn't linked yet, auto-recover seamlessly
+        // If server restarted cleanly (revision === 0) and admin has a newer safety snapshot,
+        // auto-recover immediately before/alongside Cloud Firestore reconciliation
         if (
           ws.user.role === "admin" &&
           (ws.revision ?? 0) === 0 &&
-          !isVerifiedCloudAdmin(auth.currentUser) &&
           !localRestoreTriedRef.current
         ) {
           localRestoreTriedRef.current = true;
@@ -339,6 +367,7 @@ export default function App() {
             (localSnap.revision > 0 ||
               (localSnap.users?.length || 0) > 1 ||
               (localSnap.letters?.length || 0) > 0 ||
+              (localSnap.templates?.length || 0) !== LETTER_TEMPLATES.length ||
               localSnap.siteConfig?.adminPasswordChanged)
           ) {
             try {
@@ -367,7 +396,7 @@ export default function App() {
           }
         }
 
-        // Recover branch user's saved letters from local safety mirror if server was wiped
+        // Recover branch user's saved letters & custom templates from local safety mirror if server was wiped
         let resolvedLetters = ws.letters;
         if (
           ws.user.role === "user" &&
@@ -402,13 +431,61 @@ export default function App() {
           void saveUserLettersSafetySnapshot(ws.user.userId, ws.letters);
         }
 
+        let resolvedTemplates = ws.templates;
+        if (
+          ws.user.role === "user" &&
+          (ws.revision ?? 0) === 0 &&
+          ws.siteConfig.allowUserTemplateCreate &&
+          userTemplatesRestoredRef.current !== ws.user.userId
+        ) {
+          userTemplatesRestoredRef.current = ws.user.userId;
+          const cachedTemplates = await loadUserTemplatesSafetySnapshot(
+            ws.user.userId
+          );
+          const existingIds = new Set(ws.templates.map((t) => t.id));
+          const missingTpls = cachedTemplates.filter(
+            (t) =>
+              t &&
+              t.id &&
+              !existingIds.has(t.id) &&
+              !ws.templates.some(
+                (ex) => ex.title === t.title && ex.category === t.category
+              )
+          );
+          if (missingTpls.length > 0) {
+            const newlyRestored: LetterTemplate[] = [];
+            for (const tpl of missingTpls.slice(0, 50)) {
+              try {
+                const res = await apiRequest<{ template: LetterTemplate }>(
+                  "/api/templates",
+                  {
+                    method: "POST",
+                    body: JSON.stringify(tpl),
+                  }
+                );
+                newlyRestored.push(res.template);
+              } catch {
+                // Ignore individual template recovery errors
+              }
+            }
+            if (newlyRestored.length > 0) {
+              resolvedTemplates = [...newlyRestored, ...ws.templates];
+            }
+          }
+        } else if (ws.user.role === "user" && ws.templates.length > 0) {
+          void saveUserTemplatesSafetySnapshot(ws.user.userId, ws.templates);
+        }
+
         setUser(ws.user);
         setSiteConfig(ws.siteConfig);
         setOrg(ws.organization);
         setDepartments(ws.departments);
-        setTemplates(ws.templates);
+        setTemplates(resolvedTemplates);
         setQuickPhrases(ws.quickPhrases);
-        setPlugins(Array.isArray(ws.plugins) ? ws.plugins : DEFAULT_PLUGINS);
+        const resolvedPlugins = Array.isArray(ws.plugins)
+          ? ws.plugins
+          : DEFAULT_PLUGINS;
+        setPlugins(resolvedPlugins);
         setUserUsage(
           ws.userUsage || {
             templateCounts: {},
@@ -418,13 +495,39 @@ export default function App() {
         );
         setSavedLetters(resolvedLetters);
 
+        const preferredDept =
+          ws.user.department && ws.user.department !== "সকল বিভাগ"
+            ? ws.user.department
+            : ws.templates[0]?.category;
+        const defaultBranchPad = resolveBranchPadForDepartment(
+          resolvedPlugins,
+          preferredDept
+        );
+        const branchDeptForFirst =
+          defaultBranchPad && preferredDept ? preferredDept : undefined;
+        const activeFirstSignatory =
+          defaultBranchPad?.signatories &&
+          defaultBranchPad.signatories.length > 0
+            ? defaultBranchPad.signatories[
+                defaultBranchPad.signatories.length - 1
+              ]
+            : undefined;
+
         const firstLetter: LetterData =
           ws.templates.length > 0
-            ? createLetterFromTemplate(ws.templates[0], ws.organization)
+            ? createLetterFromTemplate(
+                ws.templates[0],
+                ws.organization,
+                defaultBranchPad,
+                branchDeptForFirst
+              )
             : {
                 id: `ltr-${Date.now()}`,
                 templateType: "সাধারণ দাপ্তরিক পত্র",
-                refNumber: generateNextRefNumber(ws.organization.refPrefix, "পত্র"),
+                refNumber: generateNextRefNumber(
+                  defaultBranchPad?.refPrefix?.trim() || ws.organization.refPrefix,
+                  "পত্র"
+                ),
                 dateText: formatBengaliDate(new Date()),
                 showBanglaDate: true,
                 banglaDateText: formatBanglaCalendarDate(new Date()),
@@ -437,20 +540,38 @@ export default function App() {
                 salutation: "মহোদয়,",
                 body: "",
                 closing: "বিনীত,",
-                signatoryName: ws.organization.defaultSignatoryName,
-                signatoryTitle: ws.organization.defaultSignatoryTitle,
-                signatoryDept: ws.organization.defaultSignatoryDept,
+                signatoryName:
+                  activeFirstSignatory?.name ||
+                  ws.organization.defaultSignatoryName,
+                signatoryTitle:
+                  activeFirstSignatory?.title ||
+                  ws.organization.defaultSignatoryTitle,
+                signatoryDept:
+                  activeFirstSignatory?.department ||
+                  defaultBranchPad?.branchTitleBn ||
+                  ws.organization.defaultSignatoryDept,
                 attachments: "",
                 ccList: "",
                 letterheadStyle:
-                  ws.siteConfig.defaultLetterheadStyle || "classic",
-                letterFont: ws.siteConfig.defaultLetterFont || "sutonnymj",
+                  defaultBranchPad?.letterheadStyle ||
+                  ws.siteConfig.defaultLetterheadStyle ||
+                  "classic",
+                letterFont:
+                  defaultBranchPad?.letterFont ||
+                  ws.siteConfig.defaultLetterFont ||
+                  "sutonnymj",
                 showWatermark: true,
                 showSealPlaceholder: false,
+                ...(branchDeptForFirst
+                  ? { branchPadDepartment: branchDeptForFirst }
+                  : {}),
               };
-        firstLetter.letterheadStyle =
-          ws.siteConfig.defaultLetterheadStyle || "classic";
-        firstLetter.letterFont = ws.siteConfig.defaultLetterFont || "sutonnymj";
+        if (!defaultBranchPad) {
+          firstLetter.letterheadStyle =
+            ws.siteConfig.defaultLetterheadStyle || "classic";
+          firstLetter.letterFont =
+            ws.siteConfig.defaultLetterFont || "sutonnymj";
+        }
 
         const restoredDraft = loadLocalEditorDraft(ws.user.userId);
         if (restoredDraft) {
@@ -492,7 +613,7 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (firebaseUser && user) {
+    if (firebaseUser && user?.role === "admin") {
       void syncFirebaseUserProfile(firebaseUser, user).catch(() => {});
     }
   }, [firebaseUser, user]);
@@ -536,15 +657,17 @@ export default function App() {
 
     const key = `${user.id}:${firebaseUser.uid}`;
     if (reconcileKeyRef.current === key) return;
-    reconcileKeyRef.current = key;
 
+    let cancelled = false;
     void (async () => {
       try {
         const cloudRev = await getCloudWorkspaceRevision();
+        if (cancelled) return;
         const srvRev = serverRevisionRef.current || 0;
 
         if (cloudRev !== null && cloudRev > srvRev) {
           const cloudBackup = await loadFullWorkspaceFromFirestore();
+          if (cancelled) return;
           if (cloudBackup) {
             await apiRequest("/api/admin/restore", {
               method: "POST",
@@ -555,6 +678,8 @@ export default function App() {
             });
             serverRevisionRef.current = cloudBackup.revision || cloudRev;
             await saveLocalSafetySnapshot(cloudBackup);
+            reconcileKeyRef.current = key;
+            setCloudSyncError("");
             await loadBootstrap();
             return;
           }
@@ -562,18 +687,43 @@ export default function App() {
 
         if (cloudRev === null || srvRev > cloudRev) {
           const backup = await apiRequest<FullWorkspaceBackup>("/api/admin/backup");
+          if (cancelled) return;
           serverRevisionRef.current = backup.revision || 0;
           await saveLocalSafetySnapshot(backup);
           await saveFullWorkspaceToFirestore(backup);
         }
+
+        reconcileKeyRef.current = key;
+        setCloudSyncError("");
       } catch (err) {
         console.error("Workspace cloud reconciliation error:", err);
+        if (!cancelled) {
+          setCloudSyncError(
+            "ক্লাউড ফায়ারস্টোরের সাথে সিঙ্ক করা যায়নি। ইন্টারনেট সংযোগ পরীক্ষা করে পুনরায় চেষ্টা করুন।"
+          );
+        }
       }
     })();
-  }, [bootstrapping, user, firebaseUser, loadBootstrap]);
+
+    return () => {
+      cancelled = true;
+    };
+  }, [bootstrapping, user, firebaseUser, reconcileNonce, loadBootstrap]);
+
+  // Retry cloud reconciliation automatically when network comes back online
+  useEffect(() => {
+    const handleOnline = () => {
+      if (userRef.current?.role === "admin" && isVerifiedCloudAdmin(firebaseUserRef.current)) {
+        reconcileKeyRef.current = "";
+        setReconcileNonce((n) => n + 1);
+      }
+    };
+    window.addEventListener("online", handleOnline);
+    return () => window.removeEventListener("online", handleOnline);
+  }, []);
 
   useEffect(() => {
-    if (!firebaseUser) {
+    if (!firebaseUser || user?.role !== "admin") {
       setCloudLetters([]);
       return;
     }
@@ -581,7 +731,7 @@ export default function App() {
       setCloudLetters(list);
     });
     return () => unsubscribe();
-  }, [firebaseUser]);
+  }, [firebaseUser, user?.role]);
 
   // Apply live site theme variables (colors & typography)
   useEffect(() => {
@@ -811,9 +961,30 @@ export default function App() {
   );
 
   const handleSelectTemplate = (template: LetterTemplate) => {
-    const next = createLetterFromTemplate(template, org);
-    next.letterheadStyle = currentLetter.letterheadStyle;
-    next.letterFont = currentLetter.letterFont;
+    const categoryPad = resolveBranchPadForDepartment(plugins, template.category);
+    const userDept =
+      user?.department && user.department !== "সকল বিভাগ"
+        ? user.department
+        : undefined;
+    const userPad = !categoryPad
+      ? resolveBranchPadForDepartment(plugins, userDept)
+      : null;
+    const resolvedPad = categoryPad || userPad;
+    const resolvedDept = categoryPad
+      ? template.category
+      : userPad
+        ? userDept
+        : undefined;
+    const next = createLetterFromTemplate(
+      template,
+      org,
+      resolvedPad,
+      resolvedDept
+    );
+    if (!resolvedPad) {
+      next.letterheadStyle = currentLetter.letterheadStyle;
+      next.letterFont = currentLetter.letterFont;
+    }
     setCurrentLetter(next);
     setDraftNeedsSync(false);
     if (user) {
@@ -865,10 +1036,22 @@ export default function App() {
 
   const handleStartNewLetter = () => {
     const today = new Date();
+    const userDept =
+      user?.department && user.department !== "সকল বিভাগ"
+        ? user.department
+        : undefined;
+    const branchPad = resolveBranchPadForDepartment(plugins, userDept);
+    const primarySig =
+      branchPad?.signatories && branchPad.signatories.length > 0
+        ? branchPad.signatories[branchPad.signatories.length - 1]
+        : undefined;
     const nextDraft: LetterData = {
       id: `ltr-${Date.now()}`,
       templateType: "সাধারণ দাপ্তরিক পত্র",
-      refNumber: generateNextRefNumber(org.refPrefix, "পত্র"),
+      refNumber: generateNextRefNumber(
+        branchPad?.refPrefix?.trim() || org.refPrefix,
+        "পত্র"
+      ),
       dateText: formatBengaliDate(today),
       showBanglaDate: true,
       banglaDateText: formatBanglaCalendarDate(today),
@@ -881,16 +1064,25 @@ export default function App() {
       salutation: "মহোদয়,",
       body: "",
       closing: "বিনীত,",
-      signatoryName: org.defaultSignatoryName,
-      signatoryTitle: org.defaultSignatoryTitle,
-      signatoryDept: org.defaultSignatoryDept,
+      signatoryName: primarySig?.name || org.defaultSignatoryName,
+      signatoryTitle: primarySig?.title || org.defaultSignatoryTitle,
+      signatoryDept:
+        primarySig?.department ||
+        branchPad?.branchTitleBn ||
+        org.defaultSignatoryDept,
       attachments: "",
       ccList: "",
       letterheadStyle:
-        siteConfig.defaultLetterheadStyle || currentLetter.letterheadStyle,
-      letterFont: siteConfig.defaultLetterFont || currentLetter.letterFont,
+        branchPad?.letterheadStyle ||
+        siteConfig.defaultLetterheadStyle ||
+        currentLetter.letterheadStyle,
+      letterFont:
+        branchPad?.letterFont ||
+        siteConfig.defaultLetterFont ||
+        currentLetter.letterFont,
       showWatermark: currentLetter.showWatermark,
       showSealPlaceholder: currentLetter.showSealPlaceholder,
+      ...(branchPad && userDept ? { branchPadDepartment: userDept } : {}),
     };
     setCurrentLetter(nextDraft);
     setDraftNeedsSync(false);
@@ -928,7 +1120,7 @@ export default function App() {
       }
     }
     setDraftNeedsSync(false);
-    if (firebaseUser && user) {
+    if (firebaseUser && user?.role === "admin") {
       void saveLetterToCloud(entry, firebaseUser.uid, user.fullName).catch(() => {});
     }
     scheduleVaultSync();
@@ -970,14 +1162,28 @@ export default function App() {
       clearLocalEditorDraft(user.userId);
       setDraftNeedsSync(false);
     }
-    if (firebaseUser) {
+    if (firebaseUser && userRef.current?.role === "admin") {
       void deleteLetterFromCloud(id).catch(() => {});
     }
     scheduleVaultSync();
   };
 
   const handleConnectGoogleCloud = async () => {
-    await signInWithGoogleCloud(user);
+    setCloudConnecting(true);
+    setCloudSyncError("");
+    try {
+      await signInWithGoogleCloud(user);
+      reconcileKeyRef.current = "";
+      setReconcileNonce((n) => n + 1);
+    } catch (err) {
+      setCloudSyncError(
+        err instanceof Error
+          ? err.message
+          : "Google ক্লাউড সংযুক্ত করা যায়নি।"
+      );
+    } finally {
+      setCloudConnecting(false);
+    }
   };
 
   const handleSyncAllToCloud = async () => {
@@ -992,10 +1198,22 @@ export default function App() {
 
   const handleCreateLetterFromVoice = (contentText: string, titleHint?: string) => {
     const today = new Date();
+    const userDept =
+      user?.department && user.department !== "সকল বিভাগ"
+        ? user.department
+        : undefined;
+    const branchPad = resolveBranchPadForDepartment(plugins, userDept);
+    const primarySig =
+      branchPad?.signatories && branchPad.signatories.length > 0
+        ? branchPad.signatories[branchPad.signatories.length - 1]
+        : undefined;
     const voiceDraft: LetterData = {
       id: `ltr-${Date.now()}`,
       templateType: "ভয়েস সহায়তায় খসড়া পত্র",
-      refNumber: generateNextRefNumber(org.refPrefix, "পত্র"),
+      refNumber: generateNextRefNumber(
+        branchPad?.refPrefix?.trim() || org.refPrefix,
+        "পত্র"
+      ),
       dateText: formatBengaliDate(today),
       showBanglaDate: true,
       banglaDateText: formatBanglaCalendarDate(today),
@@ -1008,16 +1226,25 @@ export default function App() {
       salutation: "মহোদয়,",
       body: contentText,
       closing: "বিনীত,",
-      signatoryName: org.defaultSignatoryName,
-      signatoryTitle: org.defaultSignatoryTitle,
-      signatoryDept: org.defaultSignatoryDept,
+      signatoryName: primarySig?.name || org.defaultSignatoryName,
+      signatoryTitle: primarySig?.title || org.defaultSignatoryTitle,
+      signatoryDept:
+        primarySig?.department ||
+        branchPad?.branchTitleBn ||
+        org.defaultSignatoryDept,
       attachments: "",
       ccList: "",
       letterheadStyle:
-        siteConfig.defaultLetterheadStyle || currentLetter.letterheadStyle,
-      letterFont: siteConfig.defaultLetterFont || currentLetter.letterFont,
+        branchPad?.letterheadStyle ||
+        siteConfig.defaultLetterheadStyle ||
+        currentLetter.letterheadStyle,
+      letterFont:
+        branchPad?.letterFont ||
+        siteConfig.defaultLetterFont ||
+        currentLetter.letterFont,
       showWatermark: currentLetter.showWatermark,
       showSealPlaceholder: currentLetter.showSealPlaceholder,
+      ...(branchPad && userDept ? { branchPadDepartment: userDept } : {}),
     };
     setCurrentLetter(voiceDraft);
     setDraftNeedsSync(true);
@@ -1213,26 +1440,28 @@ export default function App() {
                     <span>রিয়েল-টাইম ভয়েস কথোপকথন</span>
                   </button>
 
-                  <button
-                    type="button"
-                    role="menuitem"
-                    onClick={() => {
-                      setUserMenuOpen(false);
-                      if (firebaseUser) {
-                        void signOutGoogleCloud();
-                      } else {
-                        void handleConnectGoogleCloud();
-                      }
-                    }}
-                    className="w-full px-4 py-2.5 text-left text-xs font-medium text-stone-800 hover:bg-stone-50 flex items-center gap-2 border-b border-stone-200 cursor-pointer"
-                  >
-                    <Cloud className="w-3.5 h-3.5 text-stone-500" />
-                    <span>
-                      {firebaseUser
-                        ? `ক্লাউড সংযুক্ত (${firebaseUser.email || "Google"}) · বিচ্ছিন্ন করুন`
-                        : "Google ক্লাউড সিঙ্ক যুক্ত করুন"}
-                    </span>
-                  </button>
+                  {user.role === "admin" && (
+                    <button
+                      type="button"
+                      role="menuitem"
+                      onClick={() => {
+                        setUserMenuOpen(false);
+                        if (firebaseUser) {
+                          void signOutGoogleCloud();
+                        } else {
+                          void handleConnectGoogleCloud();
+                        }
+                      }}
+                      className="w-full px-4 py-2.5 text-left text-xs font-medium text-stone-800 hover:bg-stone-50 flex items-center gap-2 border-b border-stone-200 cursor-pointer"
+                    >
+                      <Cloud className="w-3.5 h-3.5 text-stone-500" />
+                      <span>
+                        {firebaseUser
+                          ? `ক্লাউড সংযুক্ত (${firebaseUser.email || "Google"}) · বিচ্ছিন্ন করুন`
+                          : "Google ক্লাউড সিঙ্ক যুক্ত করুন"}
+                      </span>
+                    </button>
+                  )}
 
                   {user.role === "admin" && (
                     <div className="py-1 border-b border-stone-200">
@@ -1344,6 +1573,44 @@ export default function App() {
         </nav>
       </header>
 
+      {/* Persistent Admin Cloud Connection / Sync Recovery Notice */}
+      {user.role === "admin" && (!isVerifiedCloudAdmin(firebaseUser) || cloudSyncError) && (
+        <div className="no-print bg-amber-50 border-b border-amber-200">
+          <div className="max-w-[1440px] mx-auto px-4 sm:px-6 lg:px-8 py-2 flex flex-wrap items-center justify-between gap-2 text-xs text-amber-900">
+            <div className="flex items-center gap-2 min-w-0">
+              <Cloud className="w-4 h-4 text-amber-700 shrink-0" />
+              <span className="truncate">
+                {cloudSyncError
+                  ? cloudSyncError
+                  : "সার্ভার রিস্টার্ট হলেও চিঠি, টেমপ্লেট, ইউজার ও কাস্টমাইজেশন স্থায়ীভাবে সংরক্ষিত রাখতে Google ক্লাউড সংযুক্ত করুন।"}
+              </span>
+            </div>
+            {cloudSyncError && isVerifiedCloudAdmin(firebaseUser) ? (
+              <button
+                type="button"
+                onClick={() => {
+                  reconcileKeyRef.current = "";
+                  setReconcileNonce((n) => n + 1);
+                  void syncCurrentWorkspaceToVault();
+                }}
+                className="shrink-0 h-7 px-3 rounded-md bg-amber-800 text-white font-semibold hover:bg-amber-900 transition-colors cursor-pointer"
+              >
+                পুনরায় সিঙ্ক করুন
+              </button>
+            ) : (
+              <button
+                type="button"
+                disabled={cloudConnecting}
+                onClick={() => void handleConnectGoogleCloud()}
+                className="shrink-0 h-7 px-3 rounded-md bg-amber-800 text-white font-semibold hover:bg-amber-900 disabled:opacity-60 transition-colors cursor-pointer"
+              >
+                {cloudConnecting ? "সংযুক্ত হচ্ছে..." : "Google ক্লাউড সংযুক্ত করুন"}
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* Optional Site-Wide Announcement Bar */}
       {siteConfig.announcementText && siteConfig.announcementText.trim() && (
         <div
@@ -1365,6 +1632,8 @@ export default function App() {
             templates={templates}
             departments={departments}
             quickPhrases={quickPhrases}
+            plugins={plugins}
+            userDepartment={user.department}
             pluginSnippets={pluginSnippets}
             allowAiDrafting={siteConfig.allowAiDrafting}
             isSavedOnServer={savedLetters.some((l) => l.id === currentLetter.id)}
@@ -1385,7 +1654,7 @@ export default function App() {
           {activeTab === "dashboard" && (
             <DashboardView
               user={user}
-              firebaseUser={firebaseUser}
+              firebaseUser={user.role === "admin" ? firebaseUser : null}
               org={org}
               templates={templates}
               letters={savedLetters}
@@ -1402,7 +1671,9 @@ export default function App() {
                 setUser(updatedUser);
                 scheduleVaultSync();
               }}
-              onConnectGoogleCloud={handleConnectGoogleCloud}
+              onConnectGoogleCloud={
+                user.role === "admin" ? handleConnectGoogleCloud : undefined
+              }
               onStartNew={handleStartNewLetter}
               onSelectTemplate={handleSelectTemplate}
               onTogglePinTemplate={handleTogglePinTemplate}
@@ -1425,32 +1696,44 @@ export default function App() {
               onSelectTemplate={handleSelectTemplate}
               onTemplatesUpdated={(nextTpls) => {
                 setTemplates(nextTpls);
-                scheduleVaultSync();
+                if (user.role === "user") {
+                  void saveUserTemplatesSafetySnapshot(user.userId, nextTpls);
+                } else {
+                  scheduleVaultSync();
+                }
               }}
             />
           )}
           {activeTab === "saved" && (
             <SavedLettersView
               letters={savedLetters}
-              cloudLetters={cloudLetters}
-              firebaseUser={firebaseUser}
+              cloudLetters={user.role === "admin" ? cloudLetters : []}
+              firebaseUser={user.role === "admin" ? firebaseUser : null}
+              isAdmin={user.role === "admin"}
               orgName={org.nameBn}
               uiTexts={siteConfig.uiTexts}
               onLoadLetter={handleLoadSaved}
               onDuplicateLetter={handleDuplicateSaved}
               onDeleteLetter={handleDeleteSaved}
               onStartNew={handleStartNewLetter}
-              onConnectGoogleCloud={handleConnectGoogleCloud}
-              onSyncAllToCloud={handleSyncAllToCloud}
+              onConnectGoogleCloud={
+                user.role === "admin" ? handleConnectGoogleCloud : undefined
+              }
+              onSyncAllToCloud={
+                user.role === "admin" ? handleSyncAllToCloud : undefined
+              }
             />
           )}
           {activeTab === "voice" && (
             <LiveVoiceView
               user={user}
               org={org}
-              firebaseUser={firebaseUser}
+              firebaseUser={user.role === "admin" ? firebaseUser : null}
+              isAdmin={user.role === "admin"}
               primaryColor={primaryColor}
-              onConnectGoogleCloud={handleConnectGoogleCloud}
+              onConnectGoogleCloud={
+                user.role === "admin" ? handleConnectGoogleCloud : undefined
+              }
               onCreateLetterFromVoice={handleCreateLetterFromVoice}
             />
           )}
@@ -1466,6 +1749,7 @@ export default function App() {
             <AdminPanelView
               currentUser={user}
               firebaseUser={firebaseUser}
+              org={org}
               siteConfig={siteConfig}
               departments={departments}
               templates={templates}

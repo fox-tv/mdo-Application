@@ -17,6 +17,7 @@ interface SavedLettersViewProps {
   letters: SavedLetter[];
   cloudLetters?: SavedLetter[];
   firebaseUser?: FirebaseUser | null;
+  isAdmin?: boolean;
   orgName?: string;
   uiTexts?: Record<string, string>;
   onLoadLetter: (letter: SavedLetter) => void;
@@ -31,6 +32,7 @@ export const SavedLettersView: React.FC<SavedLettersViewProps> = ({
   letters,
   cloudLetters = [],
   firebaseUser = null,
+  isAdmin = false,
   orgName = "মডার্ন ডেভেলপমেন্ট অর্গানাইজেশন",
   uiTexts,
   onLoadLetter,
@@ -45,7 +47,7 @@ export const SavedLettersView: React.FC<SavedLettersViewProps> = ({
   const [syncBusy, setSyncBusy] = useState(false);
 
   const displayedLetters =
-    firebaseUser && sourceScope === "cloud" ? cloudLetters : letters;
+    isAdmin && firebaseUser && sourceScope === "cloud" ? cloudLetters : letters;
 
   const filtered = displayedLetters.filter((item) => {
     const q = query.trim().toLowerCase();
@@ -89,7 +91,7 @@ export const SavedLettersView: React.FC<SavedLettersViewProps> = ({
         </div>
 
         <div className="flex flex-wrap items-center gap-2.5 w-full md:w-auto">
-          {firebaseUser ? (
+          {isAdmin && (firebaseUser ? (
             <>
               <div className="flex items-center gap-1 p-1 bg-stone-200/70 rounded-lg">
                 <button
@@ -145,7 +147,7 @@ export const SavedLettersView: React.FC<SavedLettersViewProps> = ({
                 <span>{syncBusy ? "সংযুক্ত হচ্ছে..." : "Google ক্লাউড সিঙ্ক"}</span>
               </button>
             )
-          )}
+          ))}
 
           <div className="relative flex-1 md:w-64">
             <Search className="w-4 h-4 text-stone-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />

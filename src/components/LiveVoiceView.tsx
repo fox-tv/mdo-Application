@@ -29,8 +29,9 @@ interface LiveVoiceViewProps {
   user: PublicUser;
   org: OrganizationProfile;
   firebaseUser: FirebaseUser | null;
+  isAdmin?: boolean;
   primaryColor?: string;
-  onConnectGoogleCloud: () => Promise<void>;
+  onConnectGoogleCloud?: () => Promise<void>;
   onCreateLetterFromVoice: (contentText: string, titleHint?: string) => void;
 }
 
@@ -76,6 +77,7 @@ export const LiveVoiceView: React.FC<LiveVoiceViewProps> = ({
   user,
   org,
   firebaseUser,
+  isAdmin = false,
   primaryColor = "#1E3A8A",
   onConnectGoogleCloud,
   onCreateLetterFromVoice,
@@ -119,7 +121,7 @@ export const LiveVoiceView: React.FC<LiveVoiceViewProps> = ({
   }, [turns]);
 
   useEffect(() => {
-    if (!firebaseUser) {
+    if (!isAdmin || !firebaseUser) {
       setCloudSessions([]);
       return;
     }
@@ -129,7 +131,7 @@ export const LiveVoiceView: React.FC<LiveVoiceViewProps> = ({
       (err) => setErrorMsg(err.message)
     );
     return () => unsubscribe();
-  }, [firebaseUser]);
+  }, [isAdmin, firebaseUser]);
 
   const stopQueuedAudio = useCallback(() => {
     for (const src of activeSourcesRef.current) {
@@ -441,6 +443,7 @@ export const LiveVoiceView: React.FC<LiveVoiceViewProps> = ({
   };
 
   const handleConnectGoogle = async () => {
+    if (!isAdmin || !onConnectGoogleCloud) return;
     setErrorMsg("");
     setConnectingCloud(true);
     try {
@@ -562,7 +565,7 @@ export const LiveVoiceView: React.FC<LiveVoiceViewProps> = ({
             </div>
 
             <div className="flex items-center gap-2">
-              {firebaseUser && turns.length > 0 && (
+              {isAdmin && firebaseUser && turns.length > 0 && (
                 <button
                   type="button"
                   onClick={() => void handleSaveSessionToCloud()}
@@ -710,75 +713,88 @@ export const LiveVoiceView: React.FC<LiveVoiceViewProps> = ({
             </div>
           </div>
 
-          <div className="bg-white border border-stone-200 rounded-xl p-5 space-y-3">
-            <div className="flex items-center justify-between gap-2">
-              <h2 className="text-sm font-bold text-stone-900">
-                সংরক্ষিত ভয়েস কথোপকথন
-              </h2>
-              {firebaseUser && (
-                <span className="text-xs text-stone-500 tabular-nums">
-                  {toBengaliDigits(cloudSessions.length)}টি
-                </span>
-              )}
-            </div>
-
-            {!firebaseUser ? (
-              <div className="space-y-3">
-                <p className="text-xs text-stone-600 leading-relaxed">
-                  ভয়েস কথোপকথনের বিবরণ ক্লাউড ডাটাবেসে স্থায়ীভাবে সংরক্ষণ করতে Google অ্যাকাউন্ট সংযুক্ত করুন।
-                </p>
-                <button
-                  type="button"
-                  onClick={() => void handleConnectGoogle()}
-                  disabled={connectingCloud}
-                  style={{ backgroundColor: primaryColor }}
-                  className="w-full h-10 rounded-lg text-xs font-semibold text-white hover:opacity-90 disabled:opacity-60 cursor-pointer"
-                >
-                  {connectingCloud
-                    ? "সংযুক্ত হচ্ছে..."
-                    : "Google ক্লাউড সিঙ্ক যুক্ত করুন"}
-                </button>
+          {isAdmin ? (
+            <div className="bg-white border border-stone-200 rounded-xl p-5 space-y-3">
+              <div className="flex items-center justify-between gap-2">
+                <h2 className="text-sm font-bold text-stone-900">
+                  সংরক্ষিত ভয়েস কথোপকথন
+                </h2>
+                {firebaseUser && (
+                  <span className="text-xs text-stone-500 tabular-nums">
+                    {toBengaliDigits(cloudSessions.length)}টি
+                  </span>
+                )}
               </div>
-            ) : cloudSessions.length === 0 ? (
-              <p className="text-xs text-stone-500 leading-relaxed">
-                এখনো কোনো ভয়েস কথোপকথন ক্লাউডে সংরক্ষিত হয়নি। কথোপকথন শেষে “ক্লাউডে সংরক্ষণ” ব্যবহার করুন।
-              </p>
-            ) : (
-              <div className="divide-y divide-stone-200">
-                {cloudSessions.map((sess) => (
-                  <div
-                    key={sess.id}
-                    className="py-2.5 flex items-start justify-between gap-2"
-                  >
+
+              {!firebaseUser ? (
+                onConnectGoogleCloud ? (
+                  <div className="space-y-3">
+                    <p className="text-xs text-stone-600 leading-relaxed">
+                      ভয়েস কথোপকথনের বিবরণ ক্লাউড ডাটাবেসে স্থায়ীভাবে সংরক্ষণ করতে Google অ্যাকাউন্ট সংযুক্ত করুন।
+                    </p>
                     <button
                       type="button"
-                      onClick={() => {
-                        setActiveSessionId(sess.id);
-                        setSelectedVoice(sess.voiceName);
-                        setTurns(sess.turns || []);
-                      }}
-                      className="text-left min-w-0 flex-1 cursor-pointer hover:underline"
+                      onClick={() => void handleConnectGoogle()}
+                      disabled={connectingCloud}
+                      style={{ backgroundColor: primaryColor }}
+                      className="w-full h-10 rounded-lg text-xs font-semibold text-white hover:opacity-90 disabled:opacity-60 cursor-pointer"
                     >
-                      <p className="text-xs font-semibold text-stone-900 truncate">
-                        {sess.title}
-                      </p>
-                      <p className="text-[11px] text-stone-500 mt-0.5 tabular-nums">
-                        {sess.voiceName} · {toBengaliDigits(sess.turns?.length || 0)}টি বার্তা
-                      </p>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => void deleteVoiceSessionFromCloud(sess.id)}
-                      aria-label="কথোপকথন মুছে ফেলুন"
-                      className="p-1.5 text-stone-400 hover:text-red-600 cursor-pointer shrink-0"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
+                      {connectingCloud
+                        ? "সংযুক্ত হচ্ছে..."
+                        : "Google ক্লাউড সিঙ্ক যুক্ত করুন"}
                     </button>
                   </div>
-                ))}
-              </div>
-            )}
-          </div>
+                ) : null
+              ) : cloudSessions.length === 0 ? (
+                <p className="text-xs text-stone-500 leading-relaxed">
+                  এখনো কোনো ভয়েস কথোপকথন ক্লাউডে সংরক্ষিত হয়নি। কথোপকথন শেষে “ক্লাউডে সংরক্ষণ” ব্যবহার করুন।
+                </p>
+              ) : (
+                <div className="divide-y divide-stone-200">
+                  {cloudSessions.map((sess) => (
+                    <div
+                      key={sess.id}
+                      className="py-2.5 flex items-start justify-between gap-2"
+                    >
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setActiveSessionId(sess.id);
+                          setSelectedVoice(sess.voiceName);
+                          setTurns(sess.turns || []);
+                        }}
+                        className="text-left min-w-0 flex-1 cursor-pointer hover:underline"
+                      >
+                        <p className="text-xs font-semibold text-stone-900 truncate">
+                          {sess.title}
+                        </p>
+                        <p className="text-[11px] text-stone-500 mt-0.5 tabular-nums">
+                          {sess.voiceName} · {toBengaliDigits(sess.turns?.length || 0)}টি বার্তা
+                        </p>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void deleteVoiceSessionFromCloud(sess.id)}
+                        aria-label="কথোপকথন মুছে ফেলুন"
+                        className="p-1.5 text-stone-400 hover:text-red-600 cursor-pointer shrink-0"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          ) : (
+            <div className="bg-white border border-stone-200 rounded-xl p-5 space-y-2.5">
+              <h2 className="text-sm font-bold text-stone-900">
+                ভয়েস সহায়তা ব্যবহারের নিয়ম
+              </h2>
+              <p className="text-xs text-stone-600 leading-relaxed">
+                মাইক্রোফোনে বাংলায় নির্দেশনা দিয়ে সরাসরি খসড়া তৈরি করুন এবং প্রতিটি উত্তরের নিচে থাকা “এই বক্তব্য দিয়ে পত্র তৈরি করুন” বাটনে ক্লিক করে চিঠি সম্পাদকে নিয়ে যান।
+              </p>
+            </div>
+          )}
         </aside>
       </div>
     </div>

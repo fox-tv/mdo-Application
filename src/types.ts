@@ -139,6 +139,7 @@ export type PluginType =
   | "department-manager"
   | "backup-manager"
   | "template-access"
+  | "branch-pad-designer"
   | "ai-assistant"
   | "dashboard-widget"
   | "letter-snippet"
@@ -152,6 +153,32 @@ export interface UserTemplateAccessRule {
   allowedTemplateIds?: string[];
 }
 
+export interface BranchPadSignatory {
+  id: string;
+  roleLabel?: string;
+  name: string;
+  title: string;
+  department?: string;
+  signatureUrl?: string;
+}
+
+export interface BranchPadConfig {
+  enabled: boolean;
+  branchTitleBn?: string;
+  orgNameOverride?: string;
+  headerTagline?: string;
+  address?: string;
+  phone?: string;
+  email?: string;
+  refPrefix?: string;
+  accentColor?: string;
+  letterheadStyle?: LetterheadStyle;
+  letterFont?: LetterFont;
+  logoUrl?: string;
+  footerNote?: string;
+  signatories: BranchPadSignatory[];
+}
+
 export interface PluginConfigData {
   heading?: string;
   content?: string;
@@ -160,6 +187,7 @@ export interface PluginConfigData {
   accentColor?: string;
   enforceDepartmentDefault?: boolean;
   userTemplateRules?: Record<string, UserTemplateAccessRule>;
+  branchPads?: Record<string, BranchPadConfig>;
 }
 
 export interface SitePlugin {
@@ -223,6 +251,7 @@ export interface LetterData {
   letterFont: LetterFont;
   showWatermark: boolean;
   showSealPlaceholder: boolean;
+  branchPadDepartment?: string;
 }
 
 export interface SavedLetter extends LetterData {

@@ -43,7 +43,11 @@ import type {
   AiAssistantActionLog,
   AiAssistantConfig,
   AiAssistantPendingProposal,
+  BranchPadConfig,
+  BranchPadSignatory,
   CustomNavLink,
+  LetterFont,
+  LetterheadStyle,
   LetterTemplate,
   OrganizationProfile,
   PluginConfigData,
@@ -757,8 +761,15 @@ async function startServer() {
       return;
     }
 
+    const requestedId =
+      typeof tpl.id === "string" &&
+      /^tpl-[a-zA-Z0-9_-]{3,64}$/.test(tpl.id.trim()) &&
+      !db.templates.some((t) => t.id === tpl.id!.trim())
+        ? tpl.id.trim()
+        : `tpl-${Date.now()}`;
+
     const created: LetterTemplate = {
-      id: `tpl-${Date.now()}`,
+      id: requestedId,
       title: tpl.title.trim(),
       category: tpl.category.trim(),
       summary: (tpl.summary || "").trim(),
@@ -1310,6 +1321,107 @@ async function startServer() {
     }
   );
 
+  app.put(
+    "/api/admin/branch-pads/:department",
+    requireAuth,
+    requireAdmin,
+    (req, res) => {
+      const deptName = decodeURIComponent(String(req.params.department || "")).trim();
+      if (!deptName || deptName.length > 200) {
+        res.status(400).json({ error: "সঠিক শাখা বা বিভাগের নাম দিন।" });
+        return;
+      }
+
+      const body = (req.body || {}) as Partial<BranchPadConfig>;
+      const validStyles: LetterheadStyle[] = ["classic", "modern", "archival"];
+      const validFonts: LetterFont[] = ["sutonnymj", "serif", "sans"];
+      const safeColor = /^#[0-9a-fA-F]{6}$/.test(String(body.accentColor || "").trim())
+        ? String(body.accentColor).trim()
+        : undefined;
+
+      const rawSigs = Array.isArray(body.signatories) ? body.signatories : [];
+      const sanitizedSigs: BranchPadSignatory[] = rawSigs.slice(0, 6).map((s, idx) => {
+        const sigUrl = String(s?.signatureUrl || "").trim();
+        const safeSigUrl =
+          sigUrl.startsWith("/api/media/") ||
+          sigUrl.startsWith("/assets/") ||
+          /^https?:\/\//i.test(sigUrl)
+            ? sigUrl.slice(0, 500)
+            : "";
+        return {
+          id:
+            typeof s?.id === "string" && s.id.trim()
+              ? s.id.trim().slice(0, 64)
+              : `sig-${Date.now()}-${idx + 1}`,
+          roleLabel: String(s?.roleLabel || "").trim().slice(0, 80),
+          name: String(s?.name || "").trim().slice(0, 160),
+          title: String(s?.title || "").trim().slice(0, 160),
+          department: String(s?.department || "").trim().slice(0, 160),
+          signatureUrl: safeSigUrl,
+        };
+      });
+
+      const rawLogo = String(body.logoUrl || "").trim();
+      const safeLogoUrl =
+        rawLogo.startsWith("/api/media/") ||
+        rawLogo.startsWith("/assets/") ||
+        /^https?:\/\//i.test(rawLogo)
+          ? rawLogo.slice(0, 500)
+          : "";
+
+      const normalizedConfig: BranchPadConfig = {
+        enabled: body.enabled !== false,
+        branchTitleBn: String(body.branchTitleBn ?? deptName).trim().slice(0, 160),
+        orgNameOverride: String(body.orgNameOverride || "").trim().slice(0, 200),
+        headerTagline: String(body.headerTagline || "").trim().slice(0, 240),
+        address: String(body.address || "").trim().slice(0, 300),
+        phone: String(body.phone || "").trim().slice(0, 120),
+        email: String(body.email || "").trim().slice(0, 160),
+        refPrefix: String(body.refPrefix || "").trim().slice(0, 80),
+        accentColor: safeColor,
+        letterheadStyle: validStyles.includes(body.letterheadStyle as LetterheadStyle)
+          ? (body.letterheadStyle as LetterheadStyle)
+          : "classic",
+        letterFont: validFonts.includes(body.letterFont as LetterFont)
+          ? (body.letterFont as LetterFont)
+          : "sutonnymj",
+        logoUrl: safeLogoUrl,
+        footerNote: String(body.footerNote || "").trim().slice(0, 240),
+        signatories: sanitizedSigs,
+      };
+
+      const db = getDb();
+      let padPlugin = db.plugins.find((p) => p.type === "branch-pad-designer");
+      if (!padPlugin) {
+        const def = DEFAULT_PLUGINS.find((p) => p.type === "branch-pad-designer")!;
+        padPlugin = { ...def, config: { ...def.config, branchPads: {} } };
+        db.plugins.push(padPlugin);
+      }
+      if (!padPlugin.config) padPlugin.config = {};
+      if (!padPlugin.config.branchPads) padPlugin.config.branchPads = {};
+
+      padPlugin.config.branchPads[deptName] = normalizedConfig;
+      saveDb(db);
+      res.json({ plugins: db.plugins, branchPad: normalizedConfig });
+    }
+  );
+
+  app.delete(
+    "/api/admin/branch-pads/:department",
+    requireAuth,
+    requireAdmin,
+    (req, res) => {
+      const deptName = decodeURIComponent(String(req.params.department || "")).trim();
+      const db = getDb();
+      const padPlugin = db.plugins.find((p) => p.type === "branch-pad-designer");
+      if (padPlugin?.config?.branchPads && deptName) {
+        delete padPlugin.config.branchPads[deptName];
+        saveDb(db);
+      }
+      res.json({ plugins: db.plugins });
+    }
+  );
+
   app.post("/api/admin/departments", requireAuth, requireAdmin, (req, res) => {
     const { name } = req.body as { name?: string };
     const cleanName = (name || "").trim();
@@ -1351,6 +1463,11 @@ async function startServer() {
     db.templates = db.templates.map((t) =>
       t.category === oldName ? { ...t, category: cleanName } : t
     );
+    const padPlugin = db.plugins.find((p) => p.type === "branch-pad-designer");
+    if (padPlugin?.config?.branchPads?.[oldName] && oldName !== cleanName) {
+      padPlugin.config.branchPads[cleanName] = padPlugin.config.branchPads[oldName];
+      delete padPlugin.config.branchPads[oldName];
+    }
     saveDb(db);
     res.json({ departments: db.departments, templates: db.templates });
   });

@@ -106,11 +106,30 @@ export async function getCloudWorkspaceRevision(): Promise<number | null> {
   }
 }
 
-async function upsertDocClean(
+async function runWithConcurrency(
+  tasks: Array<() => Promise<void>>,
+  concurrency = 12
+): Promise<void> {
+  if (tasks.length === 0) return;
+  let index = 0;
+  const workers = Array.from(
+    { length: Math.min(concurrency, tasks.length) },
+    async () => {
+      while (index < tasks.length) {
+        const current = index++;
+        await tasks[current]();
+      }
+    }
+  );
+  await Promise.all(workers);
+}
+
+async function upsertDocWithKnownExistence(
   collectionName: string,
   docId: string,
   payload: Record<string, unknown>,
-  cacheKey: string
+  cacheKey: string,
+  existsAlready: boolean
 ): Promise<void> {
   const sig = computeSignature(payload);
   if (syncedSignatureCache.get(cacheKey) === sig) {
@@ -119,8 +138,7 @@ async function upsertDocClean(
   const path = `${collectionName}/${docId}`;
   try {
     const ref = doc(db, collectionName, docId);
-    const snap = await getDoc(ref);
-    if (!snap.exists()) {
+    if (!existsAlready) {
       await setDoc(ref, {
         ...payload,
         createdAt: serverTimestamp(),
@@ -143,6 +161,31 @@ export async function saveFullWorkspaceToFirestore(
 ): Promise<void> {
   const revision = Math.max(0, Math.floor(Number(backup.revision) || 0));
 
+  // Fetch existing doc IDs across all 5 vault collections in parallel
+  let metaExists = false;
+  const existingUserIds = new Set<string>();
+  const existingTplIds = new Set<string>();
+  const existingLetterIds = new Set<string>();
+  const existingMediaIds = new Set<string>();
+
+  try {
+    const [metaSnap, usersSnap, tplsSnap, lettersSnap, mediaSnap] =
+      await Promise.all([
+        getDoc(doc(db, META_COLLECTION, META_DOC_ID)),
+        getDocs(query(collection(db, USERS_COLLECTION), limit(500))),
+        getDocs(query(collection(db, TEMPLATES_COLLECTION), limit(500))),
+        getDocs(query(collection(db, LETTERS_COLLECTION), limit(500))),
+        getDocs(query(collection(db, MEDIA_COLLECTION), limit(500))),
+      ]);
+    metaExists = metaSnap.exists();
+    usersSnap.docs.forEach((d) => existingUserIds.add(d.id));
+    tplsSnap.docs.forEach((d) => existingTplIds.add(d.id));
+    lettersSnap.docs.forEach((d) => existingLetterIds.add(d.id));
+    mediaSnap.docs.forEach((d) => existingMediaIds.add(d.id));
+  } catch (error) {
+    handleFirestoreError(error, OperationType.LIST, META_COLLECTION);
+  }
+
   // 1. Save metadata document (native Maps & Lists, zero JSON strings)
   const metaPayload = {
     id: META_DOC_ID,
@@ -155,12 +198,15 @@ export async function saveFullWorkspaceToFirestore(
     plugins: stripUndefinedDeep((backup.plugins || []).slice(0, 200)),
     userUsage: stripUndefinedDeep(backup.userUsage || {}),
   };
-  await upsertDocClean(
+  await upsertDocWithKnownExistence(
     META_COLLECTION,
     META_DOC_ID,
     metaPayload,
-    `${META_COLLECTION}:${META_DOC_ID}`
+    `${META_COLLECTION}:${META_DOC_ID}`,
+    metaExists
   );
+
+  const writeTasks: Array<() => Promise<void>> = [];
 
   // 2. Sync workspace_users (one doc per user, delete removed users)
   const desiredUserIds = new Set<string>();
@@ -181,25 +227,32 @@ export async function saveFullWorkspaceToFirestore(
       userCreatedAt: clampString(u.createdAt || "", 100),
       lastLoginAt: clampString(u.lastLoginAt || "", 100),
     };
-    await upsertDocClean(
-      USERS_COLLECTION,
-      docId,
-      userPayload,
-      `${USERS_COLLECTION}:${docId}`
+    const existsAlready = existingUserIds.has(docId);
+    writeTasks.push(() =>
+      upsertDocWithKnownExistence(
+        USERS_COLLECTION,
+        docId,
+        userPayload,
+        `${USERS_COLLECTION}:${docId}`,
+        existsAlready
+      )
     );
   }
-  try {
-    const existingUsers = await getDocs(
-      query(collection(db, USERS_COLLECTION), limit(500))
-    );
-    for (const d of existingUsers.docs) {
-      if (!desiredUserIds.has(d.id)) {
-        await deleteDoc(doc(db, USERS_COLLECTION, d.id));
-        syncedSignatureCache.delete(`${USERS_COLLECTION}:${d.id}`);
-      }
+  for (const existingId of existingUserIds) {
+    if (!desiredUserIds.has(existingId)) {
+      writeTasks.push(async () => {
+        try {
+          await deleteDoc(doc(db, USERS_COLLECTION, existingId));
+          syncedSignatureCache.delete(`${USERS_COLLECTION}:${existingId}`);
+        } catch (error) {
+          handleFirestoreError(
+            error,
+            OperationType.DELETE,
+            `${USERS_COLLECTION}/${existingId}`
+          );
+        }
+      });
     }
-  } catch (error) {
-    handleFirestoreError(error, OperationType.LIST, USERS_COLLECTION);
   }
 
   // 3. Sync workspace_templates (one doc per template, delete removed)
@@ -225,25 +278,32 @@ export async function saveFullWorkspaceToFirestore(
       attachments: clampString(tpl.attachments || "", 2000),
       ccList: clampString(tpl.ccList || "", 2000),
     };
-    await upsertDocClean(
-      TEMPLATES_COLLECTION,
-      docId,
-      tplPayload,
-      `${TEMPLATES_COLLECTION}:${docId}`
+    const existsAlready = existingTplIds.has(docId);
+    writeTasks.push(() =>
+      upsertDocWithKnownExistence(
+        TEMPLATES_COLLECTION,
+        docId,
+        tplPayload,
+        `${TEMPLATES_COLLECTION}:${docId}`,
+        existsAlready
+      )
     );
   }
-  try {
-    const existingTpls = await getDocs(
-      query(collection(db, TEMPLATES_COLLECTION), limit(500))
-    );
-    for (const d of existingTpls.docs) {
-      if (!desiredTplIds.has(d.id)) {
-        await deleteDoc(doc(db, TEMPLATES_COLLECTION, d.id));
-        syncedSignatureCache.delete(`${TEMPLATES_COLLECTION}:${d.id}`);
-      }
+  for (const existingId of existingTplIds) {
+    if (!desiredTplIds.has(existingId)) {
+      writeTasks.push(async () => {
+        try {
+          await deleteDoc(doc(db, TEMPLATES_COLLECTION, existingId));
+          syncedSignatureCache.delete(`${TEMPLATES_COLLECTION}:${existingId}`);
+        } catch (error) {
+          handleFirestoreError(
+            error,
+            OperationType.DELETE,
+            `${TEMPLATES_COLLECTION}/${existingId}`
+          );
+        }
+      });
     }
-  } catch (error) {
-    handleFirestoreError(error, OperationType.LIST, TEMPLATES_COLLECTION);
   }
 
   // 4. Sync workspace_letters (one doc per letter, delete removed)
@@ -286,26 +346,34 @@ export async function saveFullWorkspaceToFirestore(
       ownerUserId: clampString(ltr.ownerUserId || "", 128),
       ownerName: clampString(ltr.ownerName || "", 200),
       department: clampString(ltr.department || "", 200),
+      branchPadDepartment: clampString(ltr.branchPadDepartment || "", 200),
     };
-    await upsertDocClean(
-      LETTERS_COLLECTION,
-      docId,
-      letterPayload,
-      `${LETTERS_COLLECTION}:${docId}`
+    const existsAlready = existingLetterIds.has(docId);
+    writeTasks.push(() =>
+      upsertDocWithKnownExistence(
+        LETTERS_COLLECTION,
+        docId,
+        letterPayload,
+        `${LETTERS_COLLECTION}:${docId}`,
+        existsAlready
+      )
     );
   }
-  try {
-    const existingLetters = await getDocs(
-      query(collection(db, LETTERS_COLLECTION), limit(500))
-    );
-    for (const d of existingLetters.docs) {
-      if (!desiredLetterIds.has(d.id)) {
-        await deleteDoc(doc(db, LETTERS_COLLECTION, d.id));
-        syncedSignatureCache.delete(`${LETTERS_COLLECTION}:${d.id}`);
-      }
+  for (const existingId of existingLetterIds) {
+    if (!desiredLetterIds.has(existingId)) {
+      writeTasks.push(async () => {
+        try {
+          await deleteDoc(doc(db, LETTERS_COLLECTION, existingId));
+          syncedSignatureCache.delete(`${LETTERS_COLLECTION}:${existingId}`);
+        } catch (error) {
+          handleFirestoreError(
+            error,
+            OperationType.DELETE,
+            `${LETTERS_COLLECTION}/${existingId}`
+          );
+        }
+      });
     }
-  } catch (error) {
-    handleFirestoreError(error, OperationType.LIST, LETTERS_COLLECTION);
   }
 
   // 5. Sync workspace_media (one doc per uploaded media file under ~900KB base64)
@@ -313,17 +381,23 @@ export async function saveFullWorkspaceToFirestore(
     if (!filename || typeof base64Data !== "string" || !base64Data) continue;
     if (base64Data.length > 940000) continue;
     const docId = sanitizeFirestoreId(filename);
-    await upsertDocClean(
-      MEDIA_COLLECTION,
-      docId,
-      {
-        id: docId,
-        filename: clampString(filename, 200),
-        base64Data,
-      },
-      `${MEDIA_COLLECTION}:${docId}`
+    const existsAlready = existingMediaIds.has(docId);
+    writeTasks.push(() =>
+      upsertDocWithKnownExistence(
+        MEDIA_COLLECTION,
+        docId,
+        {
+          id: docId,
+          filename: clampString(filename, 200),
+          base64Data,
+        },
+        `${MEDIA_COLLECTION}:${docId}`,
+        existsAlready
+      )
     );
   }
+
+  await runWithConcurrency(writeTasks, 12);
 }
 
 export async function loadFullWorkspaceFromFirestore(): Promise<FullWorkspaceBackup | null> {
@@ -343,37 +417,18 @@ export async function loadFullWorkspaceFromFirestore(): Promise<FullWorkspaceBac
   const meta = metaSnap.data();
 
   let userDocs;
-  try {
-    userDocs = await getDocs(query(collection(db, USERS_COLLECTION), limit(500)));
-  } catch (error) {
-    handleFirestoreError(error, OperationType.LIST, USERS_COLLECTION);
-  }
-
   let tplDocs;
-  try {
-    tplDocs = await getDocs(
-      query(collection(db, TEMPLATES_COLLECTION), limit(500))
-    );
-  } catch (error) {
-    handleFirestoreError(error, OperationType.LIST, TEMPLATES_COLLECTION);
-  }
-
   let letterDocs;
-  try {
-    letterDocs = await getDocs(
-      query(collection(db, LETTERS_COLLECTION), limit(500))
-    );
-  } catch (error) {
-    handleFirestoreError(error, OperationType.LIST, LETTERS_COLLECTION);
-  }
-
   let mediaDocs;
   try {
-    mediaDocs = await getDocs(
-      query(collection(db, MEDIA_COLLECTION), limit(500))
-    );
+    [userDocs, tplDocs, letterDocs, mediaDocs] = await Promise.all([
+      getDocs(query(collection(db, USERS_COLLECTION), limit(500))),
+      getDocs(query(collection(db, TEMPLATES_COLLECTION), limit(500))),
+      getDocs(query(collection(db, LETTERS_COLLECTION), limit(500))),
+      getDocs(query(collection(db, MEDIA_COLLECTION), limit(500))),
+    ]);
   } catch (error) {
-    handleFirestoreError(error, OperationType.LIST, MEDIA_COLLECTION);
+    handleFirestoreError(error, OperationType.LIST, USERS_COLLECTION);
   }
 
   const users: StoredUserBackup[] = userDocs.docs.map((d) => {
@@ -454,6 +509,9 @@ export async function loadFullWorkspaceFromFirestore(): Promise<FullWorkspaceBac
         ownerUserId: String(l.ownerUserId || ""),
         ownerName: String(l.ownerName || ""),
         department: String(l.department || ""),
+        ...(l.branchPadDepartment
+          ? { branchPadDepartment: String(l.branchPadDepartment) }
+          : {}),
       };
     })
     .sort(
@@ -513,6 +571,15 @@ export async function saveLocalSafetySnapshot(
   backup: FullWorkspaceBackup
 ): Promise<void> {
   try {
+    const compact: FullWorkspaceBackup = {
+      ...backup,
+      mediaFiles: undefined,
+    };
+    localStorage.setItem("mdo_admin_safety_ls_v1", JSON.stringify(compact));
+  } catch {
+    // Ignore localStorage quota limits
+  }
+  try {
     const idb = await openSafetyDb();
     await new Promise<void>((resolve, reject) => {
       const tx = idb.transaction(IDB_STORE, "readwrite");
@@ -527,9 +594,10 @@ export async function saveLocalSafetySnapshot(
 }
 
 export async function loadLocalSafetySnapshot(): Promise<FullWorkspaceBackup | null> {
+  let idbSnap: FullWorkspaceBackup | null = null;
   try {
     const idb = await openSafetyDb();
-    const res = await new Promise<FullWorkspaceBackup | null>((resolve, reject) => {
+    idbSnap = await new Promise<FullWorkspaceBackup | null>((resolve, reject) => {
       const tx = idb.transaction(IDB_STORE, "readonly");
       const req = tx.objectStore(IDB_STORE).get(ADMIN_SNAPSHOT_KEY);
       req.onsuccess = () =>
@@ -537,16 +605,38 @@ export async function loadLocalSafetySnapshot(): Promise<FullWorkspaceBackup | n
       req.onerror = () => reject(req.error);
     });
     idb.close();
-    return res;
   } catch {
-    return null;
+    idbSnap = null;
   }
+
+  let lsSnap: FullWorkspaceBackup | null = null;
+  try {
+    const raw = localStorage.getItem("mdo_admin_safety_ls_v1");
+    if (raw) {
+      lsSnap = JSON.parse(raw) as FullWorkspaceBackup;
+    }
+  } catch {
+    lsSnap = null;
+  }
+
+  if (idbSnap && lsSnap) {
+    return (lsSnap.revision || 0) > (idbSnap.revision || 0) ? lsSnap : idbSnap;
+  }
+  return idbSnap || lsSnap || null;
 }
 
 export async function saveUserLettersSafetySnapshot(
   userId: string,
   letters: SavedLetter[]
 ): Promise<void> {
+  try {
+    localStorage.setItem(
+      `mdo_user_letters_ls_${userId}`,
+      JSON.stringify(letters.slice(0, 100))
+    );
+  } catch {
+    // Ignore localStorage quota errors
+  }
   try {
     const idb = await openSafetyDb();
     await new Promise<void>((resolve, reject) => {
@@ -574,8 +664,73 @@ export async function loadUserLettersSafetySnapshot(
       req.onerror = () => reject(req.error);
     });
     idb.close();
-    return res;
+    if (res.length > 0) return res;
   } catch {
-    return [];
+    // Fall back to localStorage
   }
+  try {
+    const raw = localStorage.getItem(`mdo_user_letters_ls_${userId}`);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? (parsed as SavedLetter[]) : [];
+    }
+  } catch {
+    // Ignore
+  }
+  return [];
+}
+
+export async function saveUserTemplatesSafetySnapshot(
+  userId: string,
+  templates: LetterTemplate[]
+): Promise<void> {
+  try {
+    localStorage.setItem(
+      `mdo_user_templates_ls_${userId}`,
+      JSON.stringify(templates.slice(0, 200))
+    );
+  } catch {
+    // Ignore
+  }
+  try {
+    const idb = await openSafetyDb();
+    await new Promise<void>((resolve, reject) => {
+      const tx = idb.transaction(IDB_STORE, "readwrite");
+      tx.objectStore(IDB_STORE).put(templates, `user_templates_${userId}`);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+    idb.close();
+  } catch {
+    // Non-blocking
+  }
+}
+
+export async function loadUserTemplatesSafetySnapshot(
+  userId: string
+): Promise<LetterTemplate[]> {
+  try {
+    const idb = await openSafetyDb();
+    const res = await new Promise<LetterTemplate[]>((resolve, reject) => {
+      const tx = idb.transaction(IDB_STORE, "readonly");
+      const req = tx.objectStore(IDB_STORE).get(`user_templates_${userId}`);
+      req.onsuccess = () =>
+        resolve(Array.isArray(req.result) ? (req.result as LetterTemplate[]) : []);
+      req.onerror = () => reject(req.error);
+    });
+    idb.close();
+    if (res.length > 0) return res;
+  } catch {
+    // Fall back to localStorage
+  }
+  try {
+    const raw = localStorage.getItem(`mdo_user_templates_ls_${userId}`);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? (parsed as LetterTemplate[]) : [];
+    }
+  } catch {
+    // Ignore
+  }
+  return [];
 }

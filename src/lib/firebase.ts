@@ -13,6 +13,7 @@ import {
   getDoc,
   getDocFromServer,
   getFirestore,
+  initializeFirestore,
   limit,
   onSnapshot,
   query,
@@ -21,6 +22,7 @@ import {
   Timestamp,
   updateDoc,
   where,
+  type Firestore,
   type Unsubscribe,
 } from "firebase/firestore";
 import firebaseConfig from "../../firebase-applet-config.json";
@@ -33,7 +35,24 @@ import type {
 } from "../types";
 
 const app = initializeApp(firebaseConfig);
-export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
+let dbInstance: Firestore;
+try {
+  dbInstance = initializeFirestore(
+    app,
+    typeof window !== "undefined"
+      ? {
+          experimentalForceLongPolling: true,
+          ignoreUndefinedProperties: true,
+        }
+      : {
+          ignoreUndefinedProperties: true,
+        },
+    firebaseConfig.firestoreDatabaseId
+  );
+} catch {
+  dbInstance = getFirestore(app, firebaseConfig.firestoreDatabaseId);
+}
+export const db = dbInstance;
 export const auth = getAuth(app);
 export const googleProvider = new GoogleAuthProvider();
 googleProvider.setCustomParameters({ prompt: "select_account" });
@@ -246,6 +265,7 @@ export async function saveLetterToCloud(
       ? letter.letterFont
       : "sutonnymj") as "sutonnymj" | "serif" | "sans",
     department: clampString(letter.department || "", 120),
+    branchPadDepartment: clampString(letter.branchPadDepartment || "", 200),
   };
 
   try {
@@ -323,6 +343,9 @@ export function subscribeCloudLetters(
           ownerUserId: String(data.ownerUid || ""),
           ownerName: String(data.ownerName || ""),
           department: String(data.department || ""),
+          ...(data.branchPadDepartment
+            ? { branchPadDepartment: String(data.branchPadDepartment) }
+            : {}),
         };
       });
       list.sort(

@@ -1,10 +1,11 @@
 import React, { useLayoutEffect, useRef } from "react";
-import { LetterData, OrganizationProfile } from "../types";
+import { BranchPadConfig, LetterData, OrganizationProfile } from "../types";
 import { CrestIcon } from "./CrestIcon";
 
 interface LetterPreviewProps {
   letter: LetterData;
   org: OrganizationProfile;
+  branchPad?: BranchPadConfig | null;
   exportRef?: React.RefObject<HTMLDivElement | null>;
   autoFitOnePage?: boolean;
   onFitScaleChange?: (scale: number) => void;
@@ -13,11 +14,23 @@ interface LetterPreviewProps {
 export const LetterPreview: React.FC<LetterPreviewProps> = ({
   letter,
   org,
+  branchPad = null,
   exportRef,
   autoFitOnePage = true,
   onFitScaleChange,
 }) => {
-  const brandColor = org.brandColor || "#1E3A8A";
+  const activePad = branchPad && branchPad.enabled !== false ? branchPad : null;
+  const brandColor = activePad?.accentColor || org.brandColor || "#1E3A8A";
+  const effectiveOrgName = activePad?.orgNameOverride?.trim() || org.nameBn;
+  const effectiveBranchTitle = activePad?.branchTitleBn?.trim() || "";
+  const effectiveTagline = activePad?.headerTagline?.trim() || org.tagline;
+  const effectiveAddress = activePad?.address?.trim() || org.address;
+  const effectivePhone = activePad?.phone?.trim() || org.phone;
+  const effectiveEmail = activePad?.email?.trim() || org.email;
+  const effectiveLogoUrl = activePad?.logoUrl?.trim() || org.logoDataUrl;
+  const effectiveFooterNote = activePad?.footerNote?.trim() || "";
+  const padSignatories = activePad?.signatories || [];
+
   const fontClass =
     letter.letterFont === "sutonnymj"
       ? "font-letter-sutonny"
@@ -82,14 +95,14 @@ export const LetterPreview: React.FC<LetterPreviewProps> = ({
     } else {
       onFitScaleChange?.(1);
     }
-  }, [autoFitOnePage, letter, org, onFitScaleChange]);
+  }, [autoFitOnePage, letter, org, activePad, onFitScaleChange]);
 
   const renderLogoOrCrest = (size = 62) => {
-    if (org.logoDataUrl) {
+    if (effectiveLogoUrl) {
       return (
         <img
-          src={org.logoDataUrl}
-          alt={org.nameBn}
+          src={effectiveLogoUrl}
+          alt={effectiveOrgName || "প্রতিষ্ঠানের লোগো"}
           referrerPolicy="no-referrer"
           style={{ width: size, height: size, objectFit: "contain" }}
           className="shrink-0"
@@ -97,6 +110,146 @@ export const LetterPreview: React.FC<LetterPreviewProps> = ({
       );
     }
     return <CrestIcon type={org.crestType} color={brandColor} size={size} />;
+  };
+
+  const renderMultiSignatoriesSection = () => {
+    if (padSignatories.length === 1) {
+      const onlySig = padSignatories[0];
+      return (
+        <div className="mt-6 flex items-end justify-between gap-8">
+          <div>
+            {letter.showSealPlaceholder && (
+              <div className="w-[32mm] h-[18mm] border border-dashed border-stone-300 flex items-center justify-center text-[8.5pt] text-stone-400 font-letter-sans">
+                প্রতিষ্ঠানের সীল
+              </div>
+            )}
+          </div>
+
+          <div className="min-w-[54mm] text-center">
+            {letter.closing && (
+              <p className="text-[10.5pt] text-stone-800 mb-1.5 text-left">
+                {letter.closing}
+              </p>
+            )}
+            {onlySig.roleLabel && (
+              <p
+                className="text-[8.5pt] font-semibold mb-1"
+                style={{ color: brandColor }}
+              >
+                {onlySig.roleLabel}
+              </p>
+            )}
+            <div className="h-[12mm] flex items-end justify-center mb-1">
+              {onlySig.signatureUrl ? (
+                <img
+                  src={onlySig.signatureUrl}
+                  alt={onlySig.name || "স্বাক্ষর"}
+                  referrerPolicy="no-referrer"
+                  className="max-h-[12mm] max-w-[42mm] object-contain"
+                />
+              ) : org.signatureDataUrl ? (
+                <img
+                  src={org.signatureDataUrl}
+                  alt="স্বাক্ষর"
+                  referrerPolicy="no-referrer"
+                  className="max-h-[12mm] max-w-[42mm] object-contain"
+                />
+              ) : (
+                <div className="w-36 border-b border-stone-400" />
+              )}
+            </div>
+            {(onlySig.name || letter.signatoryName) && (
+              <p className="text-[11pt] font-bold text-stone-950">
+                {onlySig.name || letter.signatoryName}
+              </p>
+            )}
+            {(onlySig.title || letter.signatoryTitle) && (
+              <p className="text-[9.5pt] text-stone-700">
+                {onlySig.title || letter.signatoryTitle}
+              </p>
+            )}
+            {(onlySig.department || letter.signatoryDept) && (
+              <p className="text-[9pt] text-stone-600">
+                {onlySig.department || letter.signatoryDept}
+              </p>
+            )}
+            {effectiveOrgName && (
+              <p className="text-[9pt] font-medium text-stone-700 mt-0.5">
+                {effectiveOrgName}
+              </p>
+            )}
+          </div>
+        </div>
+      );
+    }
+
+    const colClass =
+      padSignatories.length === 2
+        ? "grid-cols-2"
+        : padSignatories.length === 3
+          ? "grid-cols-3"
+          : "grid-cols-4";
+
+    return (
+      <div className="mt-6 space-y-3">
+        {(letter.closing || letter.showSealPlaceholder) && (
+          <div className="flex items-end justify-between gap-4">
+            <div>
+              {letter.showSealPlaceholder && (
+                <div className="w-[30mm] h-[16mm] border border-dashed border-stone-300 flex items-center justify-center text-[8pt] text-stone-400 font-letter-sans">
+                  প্রতিষ্ঠানের সীল
+                </div>
+              )}
+            </div>
+            {letter.closing && (
+              <p className="text-[10.5pt] text-stone-800 pr-2">
+                {letter.closing}
+              </p>
+            )}
+          </div>
+        )}
+
+        <div className={`grid ${colClass} gap-4 pt-1 items-end`}>
+          {padSignatories.map((sig) => (
+            <div key={sig.id} className="text-center px-1">
+              {sig.roleLabel && (
+                <p
+                  className="text-[8.5pt] font-semibold mb-1"
+                  style={{ color: brandColor }}
+                >
+                  {sig.roleLabel}
+                </p>
+              )}
+              <div className="h-[11mm] flex items-end justify-center mb-1">
+                {sig.signatureUrl ? (
+                  <img
+                    src={sig.signatureUrl}
+                    alt={sig.name || "স্বাক্ষর"}
+                    referrerPolicy="no-referrer"
+                    className="max-h-[11mm] max-w-[36mm] object-contain"
+                  />
+                ) : (
+                  <div className="w-28 border-b border-stone-400" />
+                )}
+              </div>
+              <p className="text-[10pt] font-bold text-stone-950 leading-snug">
+                {sig.name || "........................"}
+              </p>
+              {sig.title && (
+                <p className="text-[8.8pt] text-stone-700 leading-snug">
+                  {sig.title}
+                </p>
+              )}
+              {sig.department && (
+                <p className="text-[8.2pt] text-stone-600 leading-snug">
+                  {sig.department}
+                </p>
+              )}
+            </div>
+          ))}
+        </div>
+      </div>
+    );
   };
 
   return (
@@ -154,22 +307,34 @@ export const LetterPreview: React.FC<LetterPreviewProps> = ({
                     className="text-[20pt] font-bold leading-tight tracking-tight"
                     style={{ color: brandColor }}
                   >
-                    {org.nameBn || "প্রতিষ্ঠানের নাম"}
+                    {effectiveOrgName || "প্রতিষ্ঠানের নাম"}
                   </h1>
+                  {effectiveBranchTitle && (
+                    <p
+                      className="text-[10.5pt] font-bold mt-0.5"
+                      style={{ color: brandColor }}
+                    >
+                      {effectiveBranchTitle}
+                    </p>
+                  )}
                   {org.nameEn && (
                     <p className="text-[8pt] tracking-[0.14em] uppercase text-stone-500 mt-0.5 font-letter-sans">
                       {org.nameEn}
                     </p>
                   )}
-                  {org.tagline && (
-                    <p className="text-[9pt] text-stone-600 mt-0.5">{org.tagline}</p>
+                  {effectiveTagline && (
+                    <p className="text-[9pt] text-stone-600 mt-0.5">
+                      {effectiveTagline}
+                    </p>
                   )}
                 </div>
               </div>
               <div className="text-right text-[8.5pt] text-stone-600 leading-snug max-w-[66mm] font-letter-sans">
-                {org.address && <p>{org.address}</p>}
-                {org.phone && <p className="tabular-nums">ফোন: {org.phone}</p>}
-                {org.email && <p>{org.email}</p>}
+                {effectiveAddress && <p>{effectiveAddress}</p>}
+                {effectivePhone && (
+                  <p className="tabular-nums">ফোন: {effectivePhone}</p>
+                )}
+                {effectiveEmail && <p>{effectiveEmail}</p>}
                 {org.regNumber && (
                   <p className="text-stone-500 mt-0.5">{org.regNumber}</p>
                 )}
@@ -185,18 +350,31 @@ export const LetterPreview: React.FC<LetterPreviewProps> = ({
                   className="text-[21pt] font-bold leading-tight"
                   style={{ color: brandColor }}
                 >
-                  {org.nameBn || "প্রতিষ্ঠানের নাম"}
+                  {effectiveOrgName || "প্রতিষ্ঠানের নাম"}
                 </h1>
+                {effectiveBranchTitle && (
+                  <p
+                    className="text-[11pt] font-bold mt-0.5 px-3 py-0.5 border-y"
+                    style={{
+                      color: brandColor,
+                      borderColor: `${brandColor}33`,
+                    }}
+                  >
+                    {effectiveBranchTitle}
+                  </p>
+                )}
                 {org.nameEn && (
                   <p className="text-[8pt] tracking-[0.16em] uppercase text-stone-500 mt-0.5 font-letter-sans">
                     {org.nameEn}
                   </p>
                 )}
-                {org.tagline && (
-                  <p className="text-[9.5pt] text-stone-700 mt-0.5">{org.tagline}</p>
+                {effectiveTagline && (
+                  <p className="text-[9.5pt] text-stone-700 mt-0.5">
+                    {effectiveTagline}
+                  </p>
                 )}
                 <div className="mt-1 flex flex-wrap items-center justify-center gap-x-2.5 gap-y-0.5 text-[8.5pt] text-stone-600 font-letter-sans">
-                  {org.address && <span>{org.address}</span>}
+                  {effectiveAddress && <span>{effectiveAddress}</span>}
                   {org.regNumber && (
                     <>
                       <span aria-hidden="true">·</span>
@@ -290,51 +468,59 @@ export const LetterPreview: React.FC<LetterPreviewProps> = ({
           </div>
 
           {/* CLOSING & SIGNATURE BLOCK */}
-          <div className="mt-6 flex items-end justify-between gap-8">
-            <div>
-              {letter.showSealPlaceholder && (
-                <div className="w-[32mm] h-[18mm] border border-dashed border-stone-300 flex items-center justify-center text-[8.5pt] text-stone-400 font-letter-sans">
-                  প্রতিষ্ঠানের সীল
-                </div>
-              )}
-            </div>
-
-            <div className="min-w-[54mm] text-center">
-              {letter.closing && (
-                <p className="text-[10.5pt] text-stone-800 mb-2 text-left">
-                  {letter.closing}
-                </p>
-              )}
-              <div className="h-[12mm] flex items-end justify-center mb-1">
-                {org.signatureDataUrl ? (
-                  <img
-                    src={org.signatureDataUrl}
-                    alt="স্বাক্ষর"
-                    referrerPolicy="no-referrer"
-                    className="max-h-[12mm] max-w-[42mm] object-contain"
-                  />
-                ) : (
-                  <div className="w-36 border-b border-stone-400" />
+          {padSignatories.length > 0 ? (
+            renderMultiSignatoriesSection()
+          ) : (
+            <div className="mt-6 flex items-end justify-between gap-8">
+              <div>
+                {letter.showSealPlaceholder && (
+                  <div className="w-[32mm] h-[18mm] border border-dashed border-stone-300 flex items-center justify-center text-[8.5pt] text-stone-400 font-letter-sans">
+                    প্রতিষ্ঠানের সীল
+                  </div>
                 )}
               </div>
-              {letter.signatoryName && (
-                <p className="text-[11pt] font-bold text-stone-950">
-                  {letter.signatoryName}
-                </p>
-              )}
-              {letter.signatoryTitle && (
-                <p className="text-[9.5pt] text-stone-700">{letter.signatoryTitle}</p>
-              )}
-              {letter.signatoryDept && (
-                <p className="text-[9pt] text-stone-600">{letter.signatoryDept}</p>
-              )}
-              {org.nameBn && (
-                <p className="text-[9pt] font-medium text-stone-700 mt-0.5">
-                  {org.nameBn}
-                </p>
-              )}
+
+              <div className="min-w-[54mm] text-center">
+                {letter.closing && (
+                  <p className="text-[10.5pt] text-stone-800 mb-2 text-left">
+                    {letter.closing}
+                  </p>
+                )}
+                <div className="h-[12mm] flex items-end justify-center mb-1">
+                  {org.signatureDataUrl ? (
+                    <img
+                      src={org.signatureDataUrl}
+                      alt="স্বাক্ষর"
+                      referrerPolicy="no-referrer"
+                      className="max-h-[12mm] max-w-[42mm] object-contain"
+                    />
+                  ) : (
+                    <div className="w-36 border-b border-stone-400" />
+                  )}
+                </div>
+                {letter.signatoryName && (
+                  <p className="text-[11pt] font-bold text-stone-950">
+                    {letter.signatoryName}
+                  </p>
+                )}
+                {letter.signatoryTitle && (
+                  <p className="text-[9.5pt] text-stone-700">
+                    {letter.signatoryTitle}
+                  </p>
+                )}
+                {letter.signatoryDept && (
+                  <p className="text-[9pt] text-stone-600">
+                    {letter.signatoryDept}
+                  </p>
+                )}
+                {effectiveOrgName && (
+                  <p className="text-[9pt] font-medium text-stone-700 mt-0.5">
+                    {effectiveOrgName}
+                  </p>
+                )}
+              </div>
             </div>
-          </div>
+          )}
 
           {/* ATTACHMENTS & CC */}
           {(attachmentLines.length > 0 || ccLines.length > 0) && (
@@ -367,11 +553,23 @@ export const LetterPreview: React.FC<LetterPreviewProps> = ({
           className="mt-4 pt-2 border-t border-stone-200 flex flex-wrap items-center justify-between gap-2 text-[8.5pt] text-stone-500 font-letter-sans"
         >
           <div className="flex flex-wrap items-center gap-x-2.5 gap-y-0.5">
-            {org.phone && <span className="tabular-nums">ফোন: {org.phone}</span>}
-            {org.email && (
+            {effectiveFooterNote && (
+              <>
+                <span className="font-medium text-stone-600">
+                  {effectiveFooterNote}
+                </span>
+                {(effectivePhone || effectiveEmail || org.website) && (
+                  <span aria-hidden="true">·</span>
+                )}
+              </>
+            )}
+            {effectivePhone && (
+              <span className="tabular-nums">ফোন: {effectivePhone}</span>
+            )}
+            {effectiveEmail && (
               <>
                 <span aria-hidden="true">·</span>
-                <span>ইমেইল: {org.email}</span>
+                <span>ইমেইল: {effectiveEmail}</span>
               </>
             )}
             {org.website && (

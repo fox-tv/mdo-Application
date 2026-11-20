@@ -44,6 +44,8 @@ import {
   AdminAiAssistantPanel,
   type AssistantSyncPayload,
 } from "./AdminAiAssistantPanel";
+import { BranchPadDesignerPanel } from "./BranchPadDesignerPanel";
+import { DEFAULT_ORGANIZATION } from "../data/templates";
 
 export type AdminTab =
   | "site"
@@ -52,6 +54,7 @@ export type AdminTab =
   | "users"
   | "templates"
   | "template-access"
+  | "branch-pads"
   | "departments"
   | "developer"
   | "security";
@@ -59,6 +62,7 @@ export type AdminTab =
 interface AdminPanelViewProps {
   currentUser: PublicUser;
   firebaseUser?: FirebaseUser | null;
+  org?: OrganizationProfile;
   siteConfig: SiteConfig;
   departments: DepartmentItem[];
   templates: LetterTemplate[];
@@ -130,6 +134,7 @@ const EMPTY_TEMPLATE_FORM: Omit<LetterTemplate, "id"> = {
 export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
   currentUser,
   firebaseUser = null,
+  org = DEFAULT_ORGANIZATION,
   siteConfig,
   departments,
   templates,
@@ -712,6 +717,8 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
       }
     } else if (type === "template-access") {
       setTab("template-access");
+    } else if (type === "branch-pad-designer") {
+      setTab("branch-pads");
     } else if (type === "ai-assistant") {
       setTab("ai-assistant");
     } else if (type === "site-customizer") {
@@ -823,6 +830,7 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
     { id: "ai-assistant", label: "এআই অ্যাসিস্ট্যান্ট" },
     { id: "site", label: "সাইট ও থিম কাস্টমাইজ" },
     { id: "plugins", label: "প্লাগইন স্টুডিও" },
+    { id: "branch-pads", label: "শাখা প্যাড ও স্বাক্ষরকারী" },
     { id: "template-access", label: "টেমপ্লেট অনুমতি" },
     { id: "users", label: "ইউজার ও পাসওয়ার্ড" },
     { id: "templates", label: "টেমপ্লেট কাস্টমাইজ" },
@@ -1556,6 +1564,19 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
           </div>
         );
       })()}
+
+      {/* TAB: BRANCH PAD & SIGNATORIES DESIGNER PLUGIN */}
+      {tab === "branch-pads" && (
+        <BranchPadDesignerPanel
+          org={org}
+          departments={departments}
+          plugins={plugins}
+          onPluginsUpdated={onPluginsUpdated}
+          onTogglePlugin={handleTogglePlugin}
+          onShowSuccess={showSuccess}
+          onShowError={showErr}
+        />
+      )}
 
       {/* TAB 2: TEMPLATES CUSTOMIZATION */}
       {tab === "templates" && (
@@ -2609,19 +2630,21 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
                       ? "টেমপ্লেট নিয়ন্ত্রণ প্লাগইন"
                       : plg.type === "template-access"
                         ? "বিভাগ ও ইউজার অনুমতি প্লাগইন"
-                        : plg.type === "ai-assistant"
-                          ? "এআই অ্যাসিস্ট্যান্ট মডিউল"
-                          : plg.type === "site-customizer"
-                            ? "থিম ও মেনু প্লাগইন"
-                            : plg.type === "department-manager"
-                              ? "বিভাগ ও বাক্য প্লাগইন"
-                              : plg.type === "backup-manager"
-                                ? "১০০% ব্যাকআপ প্লাগইন"
-                                : plg.type === "dashboard-widget"
-                                  ? "ড্যাশবোর্ড উইজেট"
-                                  : plg.type === "letter-snippet"
-                                    ? "সম্পাদক লেখা ব্লক"
-                                    : "কাস্টম CSS প্লাগইন";
+                        : plg.type === "branch-pad-designer"
+                          ? "শাখা প্যাড ও স্বাক্ষরকারী প্লাগইন"
+                          : plg.type === "ai-assistant"
+                            ? "এআই অ্যাসিস্ট্যান্ট মডিউল"
+                            : plg.type === "site-customizer"
+                              ? "থিম ও মেনু প্লাগইন"
+                              : plg.type === "department-manager"
+                                ? "বিভাগ ও বাক্য প্লাগইন"
+                                : plg.type === "backup-manager"
+                                  ? "১০০% ব্যাকআপ প্লাগইন"
+                                  : plg.type === "dashboard-widget"
+                                    ? "ড্যাশবোর্ড উইজেট"
+                                    : plg.type === "letter-snippet"
+                                      ? "সম্পাদক লেখা ব্লক"
+                                      : "কাস্টম CSS প্লাগইন";
 
                   return (
                     <div

@@ -45,7 +45,7 @@ export interface AppDatabase {
   letters: SavedLetter[];
 }
 
-const CURRENT_SCHEMA_VERSION = 5;
+const CURRENT_SCHEMA_VERSION = 6;
 const DATA_DIR = path.resolve(process.cwd(), "data");
 const MEDIA_DIR = path.join(DATA_DIR, "media");
 const DB_PATH = path.join(DATA_DIR, "app-store.json");
