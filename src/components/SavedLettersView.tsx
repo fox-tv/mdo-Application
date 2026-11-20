@@ -22,7 +22,7 @@ interface SavedLettersViewProps {
   uiTexts?: Record<string, string>;
   onLoadLetter: (letter: SavedLetter) => void;
   onDuplicateLetter: (letter: SavedLetter) => void;
-  onDeleteLetter: (id: string) => void;
+  onDeleteLetter: (id: string) => Promise<void> | void;
   onStartNew: () => void;
   onConnectGoogleCloud?: () => Promise<void>;
   onSyncAllToCloud?: () => Promise<void>;
@@ -45,9 +45,29 @@ export const SavedLettersView: React.FC<SavedLettersViewProps> = ({
   const [query, setQuery] = useState("");
   const [sourceScope, setSourceScope] = useState<"workspace" | "cloud">("workspace");
   const [syncBusy, setSyncBusy] = useState(false);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [deleteError, setDeleteError] = useState("");
 
   const displayedLetters =
     isAdmin && firebaseUser && sourceScope === "cloud" ? cloudLetters : letters;
+
+  const handleConfirmDelete = async (id: string) => {
+    setDeleteError("");
+    setDeletingId(id);
+    try {
+      await onDeleteLetter(id);
+      setConfirmDeleteId(null);
+    } catch (err) {
+      setDeleteError(
+        err instanceof Error
+          ? err.message
+          : "চিঠিটি মুছে ফেলা যায়নি। অনুগ্রহ করে আবার চেষ্টা করুন।"
+      );
+    } finally {
+      setDeletingId(null);
+    }
+  };
 
   const filtered = displayedLetters.filter((item) => {
     const q = query.trim().toLowerCase();
@@ -83,9 +103,12 @@ export const SavedLettersView: React.FC<SavedLettersViewProps> = ({
             {uiTexts?.savedLettersTitle || "সংরক্ষিত দাপ্তরিক পত্রের নথিভুক্তি"}
           </h1>
           <p className="mt-1.5 text-sm text-stone-600">
-            আপনার অ্যাকাউন্টের সংরক্ষিত দাপ্তরিক চিঠিপত্র সার্ভারে নিরাপদে সংরক্ষিত রয়েছে। মোট নথি:{" "}
+            {isAdmin && firebaseUser && sourceScope === "cloud"
+              ? "ক্লাউডে সংরক্ষিত চিঠিপত্র এখান থেকেই সরাসরি উন্মুক্ত বা স্থায়ীভাবে ডিলিট করতে পারবেন।"
+              : "আপনার অ্যাকাউন্টের সংরক্ষিত দাপ্তরিক চিঠিপত্র সার্ভারে নিরাপদে সংরক্ষিত রয়েছে।"}{" "}
+            মোট নথি:{" "}
             <span className="font-semibold tabular-nums text-stone-900">
-              {toBengaliDigits(letters.length)}টি
+              {toBengaliDigits(displayedLetters.length)}টি
             </span>
           </p>
         </div>
@@ -182,6 +205,22 @@ export const SavedLettersView: React.FC<SavedLettersViewProps> = ({
         </div>
       </div>
 
+      {deleteError && (
+        <div
+          role="alert"
+          className="mt-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-xs text-red-800 flex items-center justify-between gap-3"
+        >
+          <span>{deleteError}</span>
+          <button
+            type="button"
+            onClick={() => setDeleteError("")}
+            className="text-red-700 font-semibold hover:underline cursor-pointer shrink-0"
+          >
+            বন্ধ করুন
+          </button>
+        </div>
+      )}
+
       {displayedLetters.length === 0 ? (
         <div className="mt-8 bg-white border border-stone-200 rounded-xl p-12 text-center">
           <div className="w-12 h-12 rounded-full bg-stone-100 mx-auto flex items-center justify-center text-stone-500">
@@ -260,15 +299,43 @@ export const SavedLettersView: React.FC<SavedLettersViewProps> = ({
                   <CopyPlus className="w-3.5 h-3.5" />
                   <span>প্রতিলিপি</span>
                 </button>
-                <button
-                  type="button"
-                  title="মুছে ফেলুন"
-                  aria-label="চিঠি মুছে ফেলুন"
-                  onClick={() => onDeleteLetter(item.id)}
-                  className="inline-flex items-center justify-center w-9 h-9 rounded-lg border border-stone-300 bg-white text-stone-600 hover:text-red-700 hover:border-red-200 hover:bg-red-50 transition-colors cursor-pointer"
-                >
-                  <Trash2 className="w-4 h-4" />
-                </button>
+                {confirmDeleteId === item.id ? (
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      disabled={deletingId === item.id}
+                      onClick={() => void handleConfirmDelete(item.id)}
+                      className="inline-flex items-center gap-1 h-9 px-3 rounded-lg bg-red-600 text-xs font-semibold text-white hover:bg-red-700 disabled:opacity-60 transition-colors whitespace-nowrap cursor-pointer"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                      <span>
+                        {deletingId === item.id ? "মুছে ফেলা হচ্ছে..." : "নিশ্চিত মুছুন"}
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      disabled={deletingId === item.id}
+                      onClick={() => setConfirmDeleteId(null)}
+                      className="inline-flex items-center h-9 px-2.5 rounded-lg border border-stone-300 bg-white text-xs font-medium text-stone-700 hover:bg-stone-50 disabled:opacity-60 transition-colors whitespace-nowrap cursor-pointer"
+                    >
+                      বাতিল
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    title="মুছে ফেলুন"
+                    aria-label="চিঠি মুছে ফেলুন"
+                    onClick={() => {
+                      setDeleteError("");
+                      setConfirmDeleteId(item.id);
+                    }}
+                    className="inline-flex items-center gap-1 h-9 px-3 rounded-lg border border-stone-300 bg-white text-xs font-medium text-stone-700 hover:text-red-700 hover:border-red-200 hover:bg-red-50 transition-colors whitespace-nowrap cursor-pointer"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>মুছুন</span>
+                  </button>
+                )}
               </div>
             </div>
           ))}

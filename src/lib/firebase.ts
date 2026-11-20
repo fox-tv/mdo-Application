@@ -41,7 +41,7 @@ try {
     app,
     typeof window !== "undefined"
       ? {
-          experimentalForceLongPolling: true,
+          experimentalAutoDetectLongPolling: true,
           ignoreUndefinedProperties: true,
         }
       : {
@@ -110,6 +110,18 @@ export function handleFirestoreError(
 }
 
 async function testConnection(): Promise<void> {
+  if (typeof navigator !== "undefined" && navigator.onLine === false) {
+    if (typeof window !== "undefined") {
+      window.addEventListener(
+        "online",
+        () => {
+          void testConnection();
+        },
+        { once: true }
+      );
+    }
+    return;
+  }
   try {
     await getDocFromServer(doc(db, "test", "connection"));
   } catch (error) {
@@ -300,7 +312,7 @@ export function subscribeCloudLetters(
   const q = query(
     collection(db, "letters"),
     where("ownerUid", "==", uid),
-    limit(50)
+    limit(500)
   );
 
   return onSnapshot(

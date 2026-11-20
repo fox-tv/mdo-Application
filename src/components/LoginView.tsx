@@ -22,7 +22,6 @@ export interface PublicBranding {
   loginHeroImageUrl?: string;
   loginHeroCaption?: string;
   customBlocks?: CustomUiBlock[];
-  showDefaultAdminHint: boolean;
   uiTexts?: Record<string, string>;
 }
 
@@ -266,22 +265,6 @@ export const LoginView: React.FC<LoginViewProps> = ({
                 </span>
               </button>
             </form>
-
-            {branding.showDefaultAdminHint && (
-              <div className="mt-5 pt-4 border-t border-stone-200 text-xs text-stone-600 bg-stone-50 rounded-lg p-3">
-                <p className="font-semibold text-stone-800 mb-1">
-                  প্রথমবার অ্যাডমিন লগইন তথ্য:
-                </p>
-                <p className="tabular-nums">
-                  ইউজার আইডি: <span className="font-mono-tabular font-semibold">admin</span>
-                  {" · "}
-                  পাসওয়ার্ড: <span className="font-mono-tabular font-semibold">mdo@2026</span>
-                </p>
-                <p className="mt-1 text-[11px] text-stone-500">
-                  লগইন করে অ্যাডমিন প্যানেল থেকে পাসওয়ার্ড পরিবর্তন ও নতুন ইউজার তৈরি করতে পারবেন।
-                </p>
-              </div>
-            )}
           </div>
 
           <CustomBlocksZone

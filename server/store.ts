@@ -43,12 +43,14 @@ export interface AppDatabase {
   userUsage: Record<string, UserUsageProfile>;
   users: StoredUser[];
   letters: SavedLetter[];
+  deletedLetterIds?: string[];
 }
 
 const CURRENT_SCHEMA_VERSION = 6;
 const DATA_DIR = path.resolve(process.cwd(), "data");
 const MEDIA_DIR = path.join(DATA_DIR, "media");
 const DB_PATH = path.join(DATA_DIR, "app-store.json");
+const DB_BACKUP_PATH = path.join(DATA_DIR, "app-store.backup.json");
 
 export function emptyUsageProfile(): UserUsageProfile {
   return {
@@ -117,10 +119,25 @@ function createInitialDb(): AppDatabase {
       },
     ],
     letters: [],
+    deletedLetterIds: [],
   };
 }
 
 let cachedDb: AppDatabase | null = null;
+
+function readJsonStoreFile(filePath: string): Partial<AppDatabase> | null {
+  if (!fs.existsSync(filePath)) return null;
+  try {
+    const raw = fs.readFileSync(filePath, "utf-8");
+    const parsed = JSON.parse(raw) as Partial<AppDatabase>;
+    if (parsed && typeof parsed === "object") {
+      return parsed;
+    }
+  } catch (err) {
+    console.error(`Failed to parse store file ${filePath}:`, err);
+  }
+  return null;
+}
 
 export function getDb(): AppDatabase {
   if (cachedDb) return cachedDb;
@@ -129,9 +146,8 @@ export function getDb(): AppDatabase {
     if (!fs.existsSync(DATA_DIR)) {
       fs.mkdirSync(DATA_DIR, { recursive: true });
     }
-    if (fs.existsSync(DB_PATH)) {
-      const raw = fs.readFileSync(DB_PATH, "utf-8");
-      const parsed = JSON.parse(raw) as Partial<AppDatabase>;
+    const parsed = readJsonStoreFile(DB_PATH) || readJsonStoreFile(DB_BACKUP_PATH);
+    if (parsed) {
       const fallback = createInitialDb();
       const loadedSchema = parsed.schemaVersion || 1;
 
@@ -241,6 +257,11 @@ export function getDb(): AppDatabase {
             ? parsed.users
             : fallback.users,
         letters: Array.isArray(parsed.letters) ? parsed.letters : [],
+        deletedLetterIds: Array.isArray(parsed.deletedLetterIds)
+          ? parsed.deletedLetterIds
+              .filter((id): id is string => typeof id === "string" && Boolean(id))
+              .slice(0, 500)
+          : [],
       };
 
       if (migrated) {
@@ -270,9 +291,18 @@ export function saveDb(
   if (!fs.existsSync(DATA_DIR)) {
     fs.mkdirSync(DATA_DIR, { recursive: true });
   }
+  const serialized = JSON.stringify(db, null, 2);
   const tmpPath = `${DB_PATH}.tmp`;
-  fs.writeFileSync(tmpPath, JSON.stringify(db, null, 2), "utf-8");
+  fs.writeFileSync(tmpPath, serialized, "utf-8");
   fs.renameSync(tmpPath, DB_PATH);
+
+  try {
+    const bakTmpPath = `${DB_BACKUP_PATH}.tmp`;
+    fs.writeFileSync(bakTmpPath, serialized, "utf-8");
+    fs.renameSync(bakTmpPath, DB_BACKUP_PATH);
+  } catch {
+    // Non-blocking secondary backup write
+  }
 }
 
 export function toPublicUser(user: StoredUser): PublicUser {

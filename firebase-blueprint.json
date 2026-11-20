@@ -288,6 +288,10 @@
         "userUsage": {
           "type": "object"
         },
+        "deletedLetterIds": {
+          "type": "array",
+          "description": "Explicitly deleted letter IDs so auto-reconciliation never resurrects user-deleted letters."
+        },
         "createdAt": {
           "type": "string",
           "format": "date-time"

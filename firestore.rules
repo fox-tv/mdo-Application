@@ -129,7 +129,8 @@ service cloud.firestore {
         ])
         && data.keys().hasOnly([
           'id', 'revision', 'siteConfig', 'aiAssistantConfig', 'organization',
-          'departments', 'quickPhrases', 'plugins', 'userUsage', 'createdAt', 'updatedAt'
+          'departments', 'quickPhrases', 'plugins', 'userUsage',
+          'deletedLetterIds', 'createdAt', 'updatedAt'
         ])
         && isValidId(data.id)
         && data.id == docId
@@ -144,6 +145,11 @@ service cloud.firestore {
         && data.plugins is list && data.plugins.size() <= 200
         && (data.plugins.size() == 0 || data.plugins[0] is map)
         && data.userUsage is map && data.userUsage.keys().size() <= 500
+        && (!('deletedLetterIds' in data) || (
+          data.deletedLetterIds is list
+          && data.deletedLetterIds.size() <= 500
+          && (data.deletedLetterIds.size() == 0 || (data.deletedLetterIds[0] is string && data.deletedLetterIds[0].size() <= 128))
+        ))
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
     }
@@ -387,7 +393,8 @@ service cloud.firestore {
         && incoming().updatedAt == request.time
         && incoming().diff(existing()).affectedKeys().hasOnly([
           'revision', 'siteConfig', 'aiAssistantConfig', 'organization',
-          'departments', 'quickPhrases', 'plugins', 'userUsage', 'updatedAt'
+          'departments', 'quickPhrases', 'plugins', 'userUsage',
+          'deletedLetterIds', 'updatedAt'
         ]);
       allow delete: if isValidId(docId) && isAdmin();
     }

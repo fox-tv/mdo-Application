@@ -166,12 +166,16 @@ export interface BranchPadConfig {
   enabled: boolean;
   branchTitleBn?: string;
   orgNameOverride?: string;
+  nameEnOverride?: string;
   headerTagline?: string;
+  regNumber?: string;
   address?: string;
   phone?: string;
   email?: string;
+  website?: string;
   refPrefix?: string;
   accentColor?: string;
+  crestType?: CrestType;
   letterheadStyle?: LetterheadStyle;
   letterFont?: LetterFont;
   logoUrl?: string;
@@ -328,6 +332,7 @@ export interface WorkspacePayload {
   plugins: SitePlugin[];
   userUsage: UserUsageProfile;
   letters: SavedLetter[];
+  deletedLetterIds?: string[];
 }
 
 export type LiveVoiceName = "Zephyr" | "Kore" | "Puck" | "Charon" | "Fenrir";

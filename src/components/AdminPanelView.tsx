@@ -159,6 +159,8 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
   const [feedback, setFeedback] = useState("");
   const [errorMsg, setErrorMsg] = useState("");
   const [connectingCloud, setConnectingCloud] = useState(false);
+  const [confirmDeleteLetterId, setConfirmDeleteLetterId] = useState<string | null>(null);
+  const [deletingLetterId, setDeletingLetterId] = useState<string | null>(null);
 
   // Users state
   const [users, setUsers] = useState<PublicUser[]>([]);
@@ -2987,14 +2989,57 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
                         <span>খুলুন</span>
                         <ArrowUpRight className="w-3.5 h-3.5" />
                       </button>
-                      <button
-                        type="button"
-                        onClick={() => void onDeleteLetter(item.id)}
-                        aria-label="নথি মুছুন"
-                        className="inline-flex items-center justify-center w-9 h-9 rounded-lg border border-stone-300 text-stone-600 hover:text-red-700 hover:bg-red-50 cursor-pointer"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
+                      {confirmDeleteLetterId === item.id ? (
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            type="button"
+                            disabled={deletingLetterId === item.id}
+                            onClick={() => {
+                              setErrorMsg("");
+                              setDeletingLetterId(item.id);
+                              void onDeleteLetter(item.id)
+                                .then(() => {
+                                  setConfirmDeleteLetterId(null);
+                                  setFeedback("সংরক্ষিত চিঠিটি মুছে ফেলা হয়েছে।");
+                                })
+                                .catch((err) => {
+                                  setErrorMsg(
+                                    err instanceof Error
+                                      ? err.message
+                                      : "চিঠিটি মুছে ফেলা যায়নি।"
+                                  );
+                                })
+                                .finally(() => setDeletingLetterId(null));
+                            }}
+                            className="inline-flex items-center gap-1 h-9 px-3 rounded-lg bg-red-600 text-xs font-semibold text-white hover:bg-red-700 disabled:opacity-60 cursor-pointer"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                            <span>
+                              {deletingLetterId === item.id ? "মুছছে..." : "নিশ্চিত মুছুন"}
+                            </span>
+                          </button>
+                          <button
+                            type="button"
+                            disabled={deletingLetterId === item.id}
+                            onClick={() => setConfirmDeleteLetterId(null)}
+                            className="h-9 px-2.5 rounded-lg border border-stone-300 bg-white text-xs font-medium text-stone-700 hover:bg-stone-50 disabled:opacity-60 cursor-pointer"
+                          >
+                            বাতিল
+                          </button>
+                        </div>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setErrorMsg("");
+                            setConfirmDeleteLetterId(item.id);
+                          }}
+                          aria-label="নথি মুছুন"
+                          className="inline-flex items-center justify-center w-9 h-9 rounded-lg border border-stone-300 text-stone-600 hover:text-red-700 hover:bg-red-50 cursor-pointer"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      )}
                     </div>
                   </div>
                 ))}

@@ -45,6 +45,7 @@ import type {
   AiAssistantPendingProposal,
   BranchPadConfig,
   BranchPadSignatory,
+  CrestType,
   CustomNavLink,
   LetterFont,
   LetterheadStyle,
@@ -269,7 +270,6 @@ async function startServer() {
       primaryColor: db.siteConfig.primaryColor,
       surfaceBgColor: db.siteConfig.surfaceBgColor,
       showLoginLogo: db.siteConfig.showLoginLogo,
-      showDefaultAdminHint: !db.siteConfig.adminPasswordChanged,
       uiTexts: db.siteConfig.uiTexts || {},
       loginBannerUrl: db.siteConfig.loginBannerUrl || "",
       loginHeroImageUrl:
@@ -316,6 +316,7 @@ async function startServer() {
         plugins: db.plugins,
         userUsage: getUserUsage(db, user.userId),
         letters: visibleLetters,
+        deletedLetterIds: db.deletedLetterIds || [],
       },
     });
   });
@@ -635,6 +636,10 @@ async function startServer() {
       db.letters.unshift(entry);
     }
 
+    if (Array.isArray(db.deletedLetterIds) && db.deletedLetterIds.includes(entry.id)) {
+      db.deletedLetterIds = db.deletedLetterIds.filter((id) => id !== entry.id);
+    }
+
     const matchedTpl = db.templates.find(
       (t) => t.title === letter.templateType
     );
@@ -708,9 +713,25 @@ async function startServer() {
   app.delete("/api/letters/:id", requireAuth, (req: AuthenticatedRequest, res) => {
     const db = getDb();
     const user = req.currentUser!;
-    const target = db.letters.find((l) => l.id === req.params.id);
+    const letterId = String(req.params.id || "").trim();
+    if (!letterId) {
+      res.status(400).json({ error: "চিঠির আইডি সঠিক নয়।" });
+      return;
+    }
+
+    const target = db.letters.find((l) => l.id === letterId);
     if (!target) {
-      res.status(404).json({ error: "চিঠি খুঁজে পাওয়া যায়নি।" });
+      if (user.role !== "admin") {
+        res.status(404).json({ error: "চিঠি খুঁজে পাওয়া যায়নি।" });
+        return;
+      }
+      const prevDeleted = Array.isArray(db.deletedLetterIds) ? db.deletedLetterIds : [];
+      db.deletedLetterIds = [
+        letterId,
+        ...prevDeleted.filter((id) => id !== letterId),
+      ].slice(0, 500);
+      saveDb(db);
+      res.json({ ok: true, deletedFromCloudOnly: true });
       return;
     }
 
@@ -723,7 +744,12 @@ async function startServer() {
       return;
     }
 
-    db.letters = db.letters.filter((l) => l.id !== req.params.id);
+    db.letters = db.letters.filter((l) => l.id !== letterId);
+    const prevDeleted = Array.isArray(db.deletedLetterIds) ? db.deletedLetterIds : [];
+    db.deletedLetterIds = [
+      letterId,
+      ...prevDeleted.filter((id) => id !== letterId),
+    ].slice(0, 500);
     saveDb(db);
     res.json({ ok: true });
   });
@@ -1054,6 +1080,7 @@ async function startServer() {
       userUsage: db.userUsage,
       users: db.users,
       letters: db.letters,
+      deletedLetterIds: db.deletedLetterIds || [],
       mediaFiles: exportMediaFilesForBackup(),
     });
   });
@@ -1072,6 +1099,7 @@ async function startServer() {
       userUsage?: Record<string, UserUsageProfile>;
       users?: StoredUser[];
       letters?: SavedLetter[];
+      deletedLetterIds?: string[];
       mediaFiles?: Record<string, string>;
     };
 
@@ -1081,6 +1109,8 @@ async function startServer() {
     }
 
     const db = getDb();
+    let preservedServerData = false;
+
     if (payload.siteConfig) {
       db.siteConfig = {
         ...db.siteConfig,
@@ -1114,13 +1144,33 @@ async function startServer() {
       db.departments = payload.departments;
     }
     if (Array.isArray(payload.templates) && payload.templates.length > 0) {
-      db.templates = payload.templates;
+      if (payload.fromCloudRestore) {
+        const incomingIds = new Set(payload.templates.map((t) => t.id));
+        const extraServerTemplates = db.templates.filter(
+          (t) => t && t.id && !incomingIds.has(t.id)
+        );
+        if (extraServerTemplates.length > 0) {
+          preservedServerData = true;
+        }
+        db.templates = [...extraServerTemplates, ...payload.templates];
+      } else {
+        db.templates = payload.templates;
+      }
     }
     if (Array.isArray(payload.quickPhrases)) {
       db.quickPhrases = payload.quickPhrases;
     }
     if (Array.isArray(payload.plugins) && payload.plugins.length > 0) {
-      db.plugins = payload.plugins;
+      const restoredPlugins = payload.plugins.map((pl) => ({ ...pl }));
+      for (const defPlugin of DEFAULT_PLUGINS) {
+        if (!restoredPlugins.some((p) => p.id === defPlugin.id || p.type === defPlugin.type)) {
+          restoredPlugins.push({
+            ...defPlugin,
+            config: { ...defPlugin.config },
+          });
+        }
+      }
+      db.plugins = restoredPlugins;
     }
     if (payload.userUsage && typeof payload.userUsage === "object") {
       db.userUsage = payload.userUsage;
@@ -1135,11 +1185,70 @@ async function startServer() {
           typeof u.fullName === "string"
       );
       if (validUsers.length > 0) {
-        db.users = validUsers;
+        if (payload.fromCloudRestore) {
+          const userMap = new Map<string, StoredUser>();
+          for (const u of validUsers) {
+            userMap.set(u.id, u);
+          }
+          for (const existingU of db.users) {
+            if (!userMap.has(existingU.id)) {
+              userMap.set(existingU.id, existingU);
+              preservedServerData = true;
+            }
+          }
+          db.users = Array.from(userMap.values());
+        } else {
+          db.users = validUsers;
+        }
       }
     }
+
+    const incomingDeleted = Array.isArray(payload.deletedLetterIds)
+      ? payload.deletedLetterIds.filter((id): id is string => typeof id === "string" && Boolean(id))
+      : [];
+    const existingDeleted = Array.isArray(db.deletedLetterIds) ? db.deletedLetterIds : [];
+    const mergedDeletedSet = new Set<string>(
+      payload.fromCloudRestore
+        ? [...incomingDeleted, ...existingDeleted]
+        : incomingDeleted
+    );
+    db.deletedLetterIds = Array.from(mergedDeletedSet).slice(0, 500);
+
     if (Array.isArray(payload.letters)) {
-      db.letters = payload.letters;
+      if (payload.fromCloudRestore) {
+        const payloadIds = new Set(payload.letters.map((l) => l.id));
+        const mergedLetters = new Map<string, SavedLetter>();
+        for (const ltr of payload.letters) {
+          if (ltr && ltr.id && !mergedDeletedSet.has(ltr.id)) {
+            mergedLetters.set(ltr.id, ltr);
+          }
+        }
+        for (const srvLtr of db.letters) {
+          if (!srvLtr || !srvLtr.id || mergedDeletedSet.has(srvLtr.id)) continue;
+          const prev = mergedLetters.get(srvLtr.id);
+          if (!prev) {
+            mergedLetters.set(srvLtr.id, srvLtr);
+            preservedServerData = true;
+          } else {
+            const srvTime = new Date(srvLtr.savedAt || 0).getTime();
+            const cloudTime = new Date(prev.savedAt || 0).getTime();
+            if (srvTime > cloudTime) {
+              mergedLetters.set(srvLtr.id, srvLtr);
+              preservedServerData = true;
+            }
+          }
+        }
+        for (const srvLtr of db.letters) {
+          if (srvLtr && srvLtr.id && !payloadIds.has(srvLtr.id) && !mergedDeletedSet.has(srvLtr.id)) {
+            preservedServerData = true;
+          }
+        }
+        db.letters = Array.from(mergedLetters.values()).sort(
+          (a, b) => new Date(b.savedAt || 0).getTime() - new Date(a.savedAt || 0).getTime()
+        );
+      } else {
+        db.letters = payload.letters.filter((l) => l && l.id && !mergedDeletedSet.has(l.id));
+      }
     }
     if (payload.mediaFiles) {
       restoreMediaFilesFromBackup(payload.mediaFiles);
@@ -1150,7 +1259,11 @@ async function startServer() {
       typeof payload.revision === "number" &&
       payload.revision >= 0
     ) {
-      db.revision = payload.revision;
+      if (preservedServerData) {
+        db.revision = Math.max(payload.revision, db.revision || 0) + 1;
+      } else {
+        db.revision = payload.revision;
+      }
       db.updatedAt = new Date().toISOString();
       saveDb(db, { bumpRevision: false });
     } else {
@@ -1321,6 +1434,148 @@ async function startServer() {
     }
   );
 
+  const sanitizeAndSaveBranchPad = (
+    deptName: string,
+    rawBody: Partial<BranchPadConfig>
+  ): { plugins: SitePlugin[]; branchPad: BranchPadConfig } => {
+    const body = (rawBody || {}) as Partial<BranchPadConfig>;
+    const validStyles: LetterheadStyle[] = ["classic", "modern", "archival"];
+    const validFonts: LetterFont[] = ["sutonnymj", "serif", "sans"];
+    const validCrests: CrestType[] = [
+      "academic",
+      "corporate",
+      "heritage",
+      "justice",
+      "tech",
+      "civic",
+    ];
+    const safeColor = /^#[0-9a-fA-F]{6}$/.test(String(body.accentColor || "").trim())
+      ? String(body.accentColor).trim()
+      : undefined;
+
+    const rawSigs = Array.isArray(body.signatories) ? body.signatories : [];
+    const sanitizedSigs: BranchPadSignatory[] = rawSigs.slice(0, 6).map((s, idx) => {
+      const sigUrl = String(s?.signatureUrl || "").trim();
+      const safeSigUrl =
+        sigUrl.startsWith("/api/media/") ||
+        sigUrl.startsWith("/assets/") ||
+        /^https?:\/\//i.test(sigUrl)
+          ? sigUrl.slice(0, 500)
+          : "";
+      return {
+        id:
+          typeof s?.id === "string" && s.id.trim()
+            ? s.id.trim().slice(0, 64)
+            : `sig-${Date.now()}-${idx + 1}`,
+        roleLabel: String(s?.roleLabel || "").trim().slice(0, 80),
+        name: String(s?.name || "").trim().slice(0, 160),
+        title: String(s?.title || "").trim().slice(0, 160),
+        department: String(s?.department || "").trim().slice(0, 160),
+        signatureUrl: safeSigUrl,
+      };
+    });
+
+    const rawLogo = String(body.logoUrl || "").trim();
+    const safeLogoUrl =
+      rawLogo.startsWith("/api/media/") ||
+      rawLogo.startsWith("/assets/") ||
+      /^https?:\/\//i.test(rawLogo)
+        ? rawLogo.slice(0, 500)
+        : "";
+
+    const normalizedConfig: BranchPadConfig = {
+      enabled: body.enabled !== false,
+      branchTitleBn: String(body.branchTitleBn ?? deptName).trim().slice(0, 160),
+      orgNameOverride: String(body.orgNameOverride || "").trim().slice(0, 200),
+      nameEnOverride: String(body.nameEnOverride || "").trim().slice(0, 200),
+      headerTagline: String(body.headerTagline || "").trim().slice(0, 240),
+      regNumber: String(body.regNumber || "").trim().slice(0, 160),
+      address: String(body.address || "").trim().slice(0, 300),
+      phone: String(body.phone || "").trim().slice(0, 120),
+      email: String(body.email || "").trim().slice(0, 160),
+      website: String(body.website || "").trim().slice(0, 200),
+      refPrefix: String(body.refPrefix || "").trim().slice(0, 80),
+      accentColor: safeColor,
+      crestType: validCrests.includes(body.crestType as CrestType)
+        ? (body.crestType as CrestType)
+        : undefined,
+      letterheadStyle: validStyles.includes(body.letterheadStyle as LetterheadStyle)
+        ? (body.letterheadStyle as LetterheadStyle)
+        : "classic",
+      letterFont: validFonts.includes(body.letterFont as LetterFont)
+        ? (body.letterFont as LetterFont)
+        : "sutonnymj",
+      logoUrl: safeLogoUrl,
+      footerNote: String(body.footerNote || "").trim().slice(0, 240),
+      signatories: sanitizedSigs,
+    };
+
+    const db = getDb();
+    let padPlugin = db.plugins.find((p) => p.type === "branch-pad-designer");
+    if (!padPlugin) {
+      const def = DEFAULT_PLUGINS.find((p) => p.type === "branch-pad-designer")!;
+      padPlugin = { ...def, config: { ...def.config, branchPads: {} } };
+      db.plugins.push(padPlugin);
+    }
+    if (!padPlugin.config) padPlugin.config = {};
+    if (!padPlugin.config.branchPads) padPlugin.config.branchPads = {};
+
+    padPlugin.config.branchPads[deptName] = normalizedConfig;
+    saveDb(db);
+    return { plugins: db.plugins, branchPad: normalizedConfig };
+  };
+
+  const canModifyBranchPad = (
+    user: StoredUser,
+    deptName: string
+  ): boolean => {
+    if (user.role === "admin") return true;
+    const db = getDb();
+    if (!db.siteConfig.allowUserOrgEdit) return false;
+    if (!user.department || user.department === "সকল বিভাগ") return true;
+    return user.department === deptName;
+  };
+
+  app.put(
+    "/api/branch-pads/:department",
+    requireAuth,
+    (req: AuthenticatedRequest, res) => {
+      const deptName = decodeURIComponent(String(req.params.department || "")).trim();
+      if (!deptName || deptName.length > 200) {
+        res.status(400).json({ error: "সঠিক শাখা বা বিভাগের নাম দিন।" });
+        return;
+      }
+      if (!canModifyBranchPad(req.currentUser!, deptName)) {
+        res.status(403).json({
+          error: "আপনার শুধুমাত্র নিজ শাখার প্যাড পরিবর্তনের অনুমতি রয়েছে।",
+        });
+        return;
+      }
+      res.json(sanitizeAndSaveBranchPad(deptName, (req.body || {}) as Partial<BranchPadConfig>));
+    }
+  );
+
+  app.delete(
+    "/api/branch-pads/:department",
+    requireAuth,
+    (req: AuthenticatedRequest, res) => {
+      const deptName = decodeURIComponent(String(req.params.department || "")).trim();
+      if (!deptName || !canModifyBranchPad(req.currentUser!, deptName)) {
+        res.status(403).json({
+          error: "এই শাখার প্যাড রিসেট করার অনুমতি নেই।",
+        });
+        return;
+      }
+      const db = getDb();
+      const padPlugin = db.plugins.find((p) => p.type === "branch-pad-designer");
+      if (padPlugin?.config?.branchPads && deptName) {
+        delete padPlugin.config.branchPads[deptName];
+        saveDb(db);
+      }
+      res.json({ plugins: db.plugins });
+    }
+  );
+
   app.put(
     "/api/admin/branch-pads/:department",
     requireAuth,
@@ -1331,78 +1586,7 @@ async function startServer() {
         res.status(400).json({ error: "সঠিক শাখা বা বিভাগের নাম দিন।" });
         return;
       }
-
-      const body = (req.body || {}) as Partial<BranchPadConfig>;
-      const validStyles: LetterheadStyle[] = ["classic", "modern", "archival"];
-      const validFonts: LetterFont[] = ["sutonnymj", "serif", "sans"];
-      const safeColor = /^#[0-9a-fA-F]{6}$/.test(String(body.accentColor || "").trim())
-        ? String(body.accentColor).trim()
-        : undefined;
-
-      const rawSigs = Array.isArray(body.signatories) ? body.signatories : [];
-      const sanitizedSigs: BranchPadSignatory[] = rawSigs.slice(0, 6).map((s, idx) => {
-        const sigUrl = String(s?.signatureUrl || "").trim();
-        const safeSigUrl =
-          sigUrl.startsWith("/api/media/") ||
-          sigUrl.startsWith("/assets/") ||
-          /^https?:\/\//i.test(sigUrl)
-            ? sigUrl.slice(0, 500)
-            : "";
-        return {
-          id:
-            typeof s?.id === "string" && s.id.trim()
-              ? s.id.trim().slice(0, 64)
-              : `sig-${Date.now()}-${idx + 1}`,
-          roleLabel: String(s?.roleLabel || "").trim().slice(0, 80),
-          name: String(s?.name || "").trim().slice(0, 160),
-          title: String(s?.title || "").trim().slice(0, 160),
-          department: String(s?.department || "").trim().slice(0, 160),
-          signatureUrl: safeSigUrl,
-        };
-      });
-
-      const rawLogo = String(body.logoUrl || "").trim();
-      const safeLogoUrl =
-        rawLogo.startsWith("/api/media/") ||
-        rawLogo.startsWith("/assets/") ||
-        /^https?:\/\//i.test(rawLogo)
-          ? rawLogo.slice(0, 500)
-          : "";
-
-      const normalizedConfig: BranchPadConfig = {
-        enabled: body.enabled !== false,
-        branchTitleBn: String(body.branchTitleBn ?? deptName).trim().slice(0, 160),
-        orgNameOverride: String(body.orgNameOverride || "").trim().slice(0, 200),
-        headerTagline: String(body.headerTagline || "").trim().slice(0, 240),
-        address: String(body.address || "").trim().slice(0, 300),
-        phone: String(body.phone || "").trim().slice(0, 120),
-        email: String(body.email || "").trim().slice(0, 160),
-        refPrefix: String(body.refPrefix || "").trim().slice(0, 80),
-        accentColor: safeColor,
-        letterheadStyle: validStyles.includes(body.letterheadStyle as LetterheadStyle)
-          ? (body.letterheadStyle as LetterheadStyle)
-          : "classic",
-        letterFont: validFonts.includes(body.letterFont as LetterFont)
-          ? (body.letterFont as LetterFont)
-          : "sutonnymj",
-        logoUrl: safeLogoUrl,
-        footerNote: String(body.footerNote || "").trim().slice(0, 240),
-        signatories: sanitizedSigs,
-      };
-
-      const db = getDb();
-      let padPlugin = db.plugins.find((p) => p.type === "branch-pad-designer");
-      if (!padPlugin) {
-        const def = DEFAULT_PLUGINS.find((p) => p.type === "branch-pad-designer")!;
-        padPlugin = { ...def, config: { ...def.config, branchPads: {} } };
-        db.plugins.push(padPlugin);
-      }
-      if (!padPlugin.config) padPlugin.config = {};
-      if (!padPlugin.config.branchPads) padPlugin.config.branchPads = {};
-
-      padPlugin.config.branchPads[deptName] = normalizedConfig;
-      saveDb(db);
-      res.json({ plugins: db.plugins, branchPad: normalizedConfig });
+      res.json(sanitizeAndSaveBranchPad(deptName, (req.body || {}) as Partial<BranchPadConfig>));
     }
   );
 

@@ -50,6 +50,7 @@ import { resolveBranchPadForDepartment } from "./utils/branchPad";
 import {
   auth,
   deleteLetterFromCloud,
+  sanitizeFirestoreId,
   saveLetterToCloud,
   signInWithGoogleCloud,
   signOutGoogleCloud,
@@ -57,6 +58,7 @@ import {
   syncFirebaseUserProfile,
 } from "./lib/firebase";
 import {
+  deleteWorkspaceLetterFromVault,
   getCloudWorkspaceRevision,
   loadFullWorkspaceFromFirestore,
   loadLocalSafetySnapshot,
@@ -114,7 +116,6 @@ const DEFAULT_PUBLIC_BRANDING: PublicBranding = {
   loginHeroImageUrl: "",
   loginHeroCaption: "",
   customBlocks: [],
-  showDefaultAdminHint: true,
   uiTexts: DEFAULT_SITE_CONFIG.uiTexts || {},
 };
 
@@ -271,6 +272,7 @@ export default function App() {
 
   const userMenuRef = useRef<HTMLDivElement | null>(null);
   const serverRevisionRef = useRef<number>(0);
+  const lastSyncedRevisionRef = useRef<number>(-1);
   const reconcileKeyRef = useRef<string>("");
   const localRestoreTriedRef = useRef<boolean>(false);
   const userLettersRestoredRef = useRef<string>("");
@@ -279,18 +281,22 @@ export default function App() {
   const syncTimerRef = useRef<number | null>(null);
   const userRef = useRef<PublicUser | null>(null);
   const firebaseUserRef = useRef<FirebaseUser | null>(null);
+  const cloudLettersRef = useRef<SavedLetter[]>([]);
   userRef.current = user;
   firebaseUserRef.current = firebaseUser;
+  cloudLettersRef.current = cloudLetters;
 
   const syncCurrentWorkspaceToVault = useCallback(async () => {
     const activeUser = userRef.current;
     if (!activeUser || activeUser.role !== "admin") return;
     try {
       const backup = await apiRequest<FullWorkspaceBackup>("/api/admin/backup");
-      serverRevisionRef.current = backup.revision || 0;
+      const rev = backup.revision || 0;
+      serverRevisionRef.current = rev;
       await saveLocalSafetySnapshot(backup);
       if (isVerifiedCloudAdmin(firebaseUserRef.current)) {
         await saveFullWorkspaceToFirestore(backup);
+        lastSyncedRevisionRef.current = rev;
         setCloudSyncError("");
       }
     } catch (err) {
@@ -396,39 +402,51 @@ export default function App() {
           }
         }
 
-        // Recover branch user's saved letters & custom templates from local safety mirror if server was wiped
+        // Recover branch user's saved letters from local safety mirror if server was wiped,
+        // while strictly honoring deletedLetterIds so intentionally deleted letters never return
         let resolvedLetters = ws.letters;
-        if (
-          ws.user.role === "user" &&
-          ws.letters.length === 0 &&
-          userLettersRestoredRef.current !== ws.user.userId
-        ) {
-          userLettersRestoredRef.current = ws.user.userId;
-          const cachedLetters = await loadUserLettersSafetySnapshot(
-            ws.user.userId
-          );
-          if (cachedLetters.length > 0) {
-            const recovered: SavedLetter[] = [];
-            for (const item of cachedLetters.slice(0, 100)) {
-              try {
-                const res = await apiRequest<{ letter: SavedLetter }>(
-                  "/api/letters",
-                  {
-                    method: "POST",
-                    body: JSON.stringify(item),
-                  }
-                );
-                recovered.push(res.letter);
-              } catch {
-                // Skip individual letter failures
+        const deletedLetterSet = new Set(
+          Array.isArray(ws.deletedLetterIds) ? ws.deletedLetterIds : []
+        );
+        if (ws.user.role === "user") {
+          if (userLettersRestoredRef.current !== ws.user.userId) {
+            userLettersRestoredRef.current = ws.user.userId;
+            const cachedLetters = await loadUserLettersSafetySnapshot(
+              ws.user.userId
+            );
+            const existingIds = new Set(ws.letters.map((l) => l.id));
+            const missingLetters = cachedLetters.filter(
+              (item) =>
+                item &&
+                item.id &&
+                !existingIds.has(item.id) &&
+                !deletedLetterSet.has(item.id)
+            );
+            if (
+              missingLetters.length > 0 &&
+              ((ws.revision ?? 0) === 0 || ws.letters.length === 0)
+            ) {
+              const recovered: SavedLetter[] = [];
+              for (const item of missingLetters.slice(0, 100)) {
+                try {
+                  const res = await apiRequest<{ letter: SavedLetter }>(
+                    "/api/letters",
+                    {
+                      method: "POST",
+                      body: JSON.stringify(item),
+                    }
+                  );
+                  recovered.push(res.letter);
+                } catch {
+                  // Skip individual letter failures
+                }
+              }
+              if (recovered.length > 0) {
+                resolvedLetters = [...recovered, ...ws.letters];
               }
             }
-            if (recovered.length > 0) {
-              resolvedLetters = recovered;
-            }
           }
-        } else if (ws.user.role === "user" && ws.letters.length > 0) {
-          void saveUserLettersSafetySnapshot(ws.user.userId, ws.letters);
+          void saveUserLettersSafetySnapshot(ws.user.userId, resolvedLetters);
         }
 
         let resolvedTemplates = ws.templates;
@@ -669,18 +687,27 @@ export default function App() {
           const cloudBackup = await loadFullWorkspaceFromFirestore();
           if (cancelled) return;
           if (cloudBackup) {
-            await apiRequest("/api/admin/restore", {
+            const restoreRes = await apiRequest<{
+              ok: boolean;
+              revision?: number;
+            }>("/api/admin/restore", {
               method: "POST",
               body: JSON.stringify({
                 ...cloudBackup,
                 fromCloudRestore: true,
               }),
             });
-            serverRevisionRef.current = cloudBackup.revision || cloudRev;
+            const mergedRev = restoreRes.revision ?? cloudBackup.revision ?? cloudRev;
+            serverRevisionRef.current = mergedRev;
+            lastSyncedRevisionRef.current = cloudBackup.revision || cloudRev;
             await saveLocalSafetySnapshot(cloudBackup);
             reconcileKeyRef.current = key;
             setCloudSyncError("");
             await loadBootstrap();
+            // If server merged un-synced branch user letters/items, push merged state back to Firestore
+            if (mergedRev > (cloudBackup.revision || cloudRev)) {
+              void syncCurrentWorkspaceToVault();
+            }
             return;
           }
         }
@@ -688,9 +715,13 @@ export default function App() {
         if (cloudRev === null || srvRev > cloudRev) {
           const backup = await apiRequest<FullWorkspaceBackup>("/api/admin/backup");
           if (cancelled) return;
-          serverRevisionRef.current = backup.revision || 0;
+          const rev = backup.revision || 0;
+          serverRevisionRef.current = rev;
           await saveLocalSafetySnapshot(backup);
           await saveFullWorkspaceToFirestore(backup);
+          lastSyncedRevisionRef.current = rev;
+        } else {
+          lastSyncedRevisionRef.current = srvRev;
         }
 
         reconcileKeyRef.current = key;
@@ -708,7 +739,73 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [bootstrapping, user, firebaseUser, reconcileNonce, loadBootstrap]);
+  }, [bootstrapping, user, firebaseUser, reconcileNonce, loadBootstrap, syncCurrentWorkspaceToVault]);
+
+  // Keep admin's Cloud Firestore & local vault in sync with edits made by branch users
+  useEffect(() => {
+    if (!user || user.role !== "admin") return;
+
+    let checking = false;
+    const checkServerRevisionAndSync = async () => {
+      if (checking) return;
+      if (userRef.current?.role !== "admin") return;
+      checking = true;
+      try {
+        const res = await apiRequest<{
+          authenticated: boolean;
+          workspace?: WorkspacePayload;
+        }>("/api/bootstrap");
+        if (!res.authenticated || !res.workspace) return;
+        const srvRev = res.workspace.revision ?? 0;
+        if (srvRev > serverRevisionRef.current) {
+          serverRevisionRef.current = srvRev;
+          setSavedLetters(res.workspace.letters);
+          setTemplates(res.workspace.templates);
+          setOrg(res.workspace.organization);
+          if (Array.isArray(res.workspace.plugins)) {
+            setPlugins(res.workspace.plugins);
+          }
+        }
+        const activeUser = userRef.current;
+        const fbUser = firebaseUserRef.current;
+        const expectedKey =
+          activeUser && fbUser ? `${activeUser.id}:${fbUser.uid}` : "";
+        if (
+          activeUser?.role === "admin" &&
+          isVerifiedCloudAdmin(fbUser) &&
+          expectedKey &&
+          reconcileKeyRef.current === expectedKey &&
+          lastSyncedRevisionRef.current >= 0 &&
+          srvRev > lastSyncedRevisionRef.current
+        ) {
+          await syncCurrentWorkspaceToVault();
+        }
+      } catch {
+        // Non-blocking background sync check
+      } finally {
+        checking = false;
+      }
+    };
+
+    const handleVisibilityOrFocus = () => {
+      if (document.visibilityState === "visible") {
+        void checkServerRevisionAndSync();
+      }
+    };
+    const intervalId = window.setInterval(() => {
+      if (document.visibilityState === "visible") {
+        void checkServerRevisionAndSync();
+      }
+    }, 45000);
+
+    document.addEventListener("visibilitychange", handleVisibilityOrFocus);
+    window.addEventListener("focus", handleVisibilityOrFocus);
+    return () => {
+      window.clearInterval(intervalId);
+      document.removeEventListener("visibilitychange", handleVisibilityOrFocus);
+      window.removeEventListener("focus", handleVisibilityOrFocus);
+    };
+  }, [user, syncCurrentWorkspaceToVault]);
 
   // Retry cloud reconciliation automatically when network comes back online
   useEffect(() => {
@@ -723,7 +820,7 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (!firebaseUser || user?.role !== "admin") {
+    if (!firebaseUser || !firebaseUser.emailVerified || user?.role !== "admin") {
       setCloudLetters([]);
       return;
     }
@@ -1150,7 +1247,9 @@ export default function App() {
   };
 
   const handleDeleteSaved = async (id: string) => {
-    await apiRequest(`/api/letters/${id}`, { method: "DELETE" });
+    await apiRequest(`/api/letters/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+    });
     setSavedLetters((prev) => {
       const nextList = prev.filter((item) => item.id !== id);
       if (user?.role === "user") {
@@ -1162,8 +1261,25 @@ export default function App() {
       clearLocalEditorDraft(user.userId);
       setDraftNeedsSync(false);
     }
-    if (firebaseUser && userRef.current?.role === "admin") {
-      void deleteLetterFromCloud(id).catch(() => {});
+    const activeFbUser = firebaseUserRef.current;
+    if (activeFbUser && userRef.current?.role === "admin") {
+      const safeTargetId = sanitizeFirestoreId(id);
+      const existsInCloudLetters = cloudLettersRef.current.some(
+        (item) =>
+          item.id === id || sanitizeFirestoreId(item.id) === safeTargetId
+      );
+      if (existsInCloudLetters) {
+        await deleteLetterFromCloud(id);
+        setCloudLetters((prev) =>
+          prev.filter(
+            (item) =>
+              item.id !== id && sanitizeFirestoreId(item.id) !== safeTargetId
+          )
+        );
+      }
+      if (isVerifiedCloudAdmin(activeFbUser)) {
+        await deleteWorkspaceLetterFromVault(id);
+      }
     }
     scheduleVaultSync();
   };
@@ -1740,9 +1856,18 @@ export default function App() {
           {activeTab === "organization" && canEditOrg && (
             <OrganizationView
               org={org}
+              departments={departments}
+              plugins={plugins}
               canEdit={canEditOrg}
+              userRole={user.role}
+              userDepartment={user.department}
               uiTexts={siteConfig.uiTexts}
               onSaveOrg={handleSaveOrg}
+              onPluginsUpdated={(nextPlugins) => {
+                setPlugins(nextPlugins);
+                scheduleVaultSync();
+              }}
+              onOpenBranchPadPlugin={() => openAdminSection("branch-pads")}
             />
           )}
           {activeTab === "admin" && user.role === "admin" && (
@@ -1777,7 +1902,6 @@ export default function App() {
                       b.enabled &&
                       (b.placement === "login-top" || b.placement === "login-bottom")
                   ),
-                  showDefaultAdminHint: !next.adminPasswordChanged,
                   uiTexts: next.uiTexts || {},
                 }));
                 scheduleVaultSync();
@@ -1826,7 +1950,6 @@ export default function App() {
                       b.enabled &&
                       (b.placement === "login-top" || b.placement === "login-bottom")
                   ),
-                  showDefaultAdminHint: !restored.siteConfig.adminPasswordChanged,
                   uiTexts: restored.siteConfig.uiTexts || {},
                 }));
                 if (Array.isArray(restored.users) && user) {

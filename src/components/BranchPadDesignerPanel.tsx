@@ -12,6 +12,7 @@ import {
 import type {
   BranchPadConfig,
   BranchPadSignatory,
+  CrestType,
   DepartmentItem,
   LetterData,
   LetterFont,
@@ -27,7 +28,17 @@ import {
   toBengaliDigits,
 } from "../utils/bengali";
 import { createDefaultBranchPadConfig } from "../utils/branchPad";
+import { CrestIcon } from "./CrestIcon";
 import { LetterPreview } from "./LetterPreview";
+
+const CREST_OPTIONS: { id: CrestType; label: string }[] = [
+  { id: "heritage", label: "ঐতিহ্যবাহী" },
+  { id: "academic", label: "শিক্ষা" },
+  { id: "corporate", label: "কর্পোরেট" },
+  { id: "tech", label: "প্রযুক্তি" },
+  { id: "justice", label: "আইন ও ন্যায়" },
+  { id: "civic", label: "সামাজিক" },
+];
 
 interface BranchPadDesignerPanelProps {
   org: OrganizationProfile;
@@ -548,6 +559,24 @@ export const BranchPadDesignerPanel: React.FC<BranchPadDesignerPanelProps> = ({
                 </div>
                 <div>
                   <label
+                    htmlFor="bp-name-en"
+                    className="block text-xs font-medium text-stone-700 mb-1"
+                  >
+                    প্রতিষ্ঠানের ইংরেজি নাম (ঐচ্ছিক)
+                  </label>
+                  <input
+                    id="bp-name-en"
+                    type="text"
+                    value={draft.nameEnOverride || ""}
+                    onChange={(e) =>
+                      setDraft({ ...draft, nameEnOverride: e.target.value })
+                    }
+                    placeholder={org.nameEn}
+                    className="w-full h-10 rounded-lg border border-stone-300 px-3 text-sm text-stone-900"
+                  />
+                </div>
+                <div>
+                  <label
                     htmlFor="bp-tagline"
                     className="block text-xs font-medium text-stone-700 mb-1"
                   >
@@ -564,9 +593,27 @@ export const BranchPadDesignerPanel: React.FC<BranchPadDesignerPanelProps> = ({
                     className="w-full h-10 rounded-lg border border-stone-300 px-3 text-sm text-stone-900"
                   />
                 </div>
+                <div>
+                  <label
+                    htmlFor="bp-reg-number"
+                    className="block text-xs font-medium text-stone-700 mb-1"
+                  >
+                    নিবন্ধন / লাইসেন্স নম্বর
+                  </label>
+                  <input
+                    id="bp-reg-number"
+                    type="text"
+                    value={draft.regNumber || ""}
+                    onChange={(e) =>
+                      setDraft({ ...draft, regNumber: e.target.value })
+                    }
+                    placeholder={org.regNumber}
+                    className="w-full h-10 rounded-lg border border-stone-300 px-3 text-sm text-stone-900"
+                  />
+                </div>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
                 <div>
                   <label
                     htmlFor="bp-address"
@@ -620,6 +667,51 @@ export const BranchPadDesignerPanel: React.FC<BranchPadDesignerPanelProps> = ({
                     placeholder={org.email}
                     className="w-full h-10 rounded-lg border border-stone-300 px-3 text-xs text-stone-900"
                   />
+                </div>
+                <div>
+                  <label
+                    htmlFor="bp-website"
+                    className="block text-xs font-medium text-stone-700 mb-1"
+                  >
+                    শাখার ওয়েবসাইট
+                  </label>
+                  <input
+                    id="bp-website"
+                    type="text"
+                    value={draft.website || ""}
+                    onChange={(e) =>
+                      setDraft({ ...draft, website: e.target.value })
+                    }
+                    placeholder={org.website}
+                    className="w-full h-10 rounded-lg border border-stone-300 px-3 text-xs text-stone-900"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <p className="text-xs font-medium text-stone-700 mb-1.5">
+                  শাখার প্রাতিষ্ঠানিক প্রতীক (নিজস্ব লোগো না থাকলে প্রদর্শিত)
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  {CREST_OPTIONS.map((crest) => (
+                    <button
+                      key={crest.id}
+                      type="button"
+                      onClick={() => setDraft({ ...draft, crestType: crest.id })}
+                      className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-xs font-medium cursor-pointer ${
+                        (draft.crestType || org.crestType) === crest.id
+                          ? "border-[#1E3A8A] bg-[#1E3A8A]/5 text-[#1E3A8A]"
+                          : "border-stone-200 bg-white text-stone-700 hover:bg-stone-50"
+                      }`}
+                    >
+                      <CrestIcon
+                        type={crest.id}
+                        color={draft.accentColor || org.brandColor}
+                        size={18}
+                      />
+                      <span>{crest.label}</span>
+                    </button>
+                  ))}
                 </div>
               </div>
 

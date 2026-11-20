@@ -2,13 +2,20 @@ import {
   collection,
   deleteDoc,
   doc,
+  documentId,
   getDoc,
   getDocs,
   limit,
+  orderBy,
   query,
   serverTimestamp,
   setDoc,
+  startAfter,
   updateDoc,
+  type DocumentData,
+  type Query,
+  type QueryDocumentSnapshot,
+  type QuerySnapshot,
 } from "firebase/firestore";
 import {
   db,
@@ -49,6 +56,7 @@ export interface FullWorkspaceBackup {
   userUsage: Record<string, UserUsageProfile>;
   users: StoredUserBackup[];
   letters: SavedLetter[];
+  deletedLetterIds?: string[];
   mediaFiles?: Record<string, string>;
 }
 
@@ -156,6 +164,63 @@ async function upsertDocWithKnownExistence(
   }
 }
 
+async function fetchAllCollectionDocs(
+  collectionName: string
+): Promise<QueryDocumentSnapshot<DocumentData, DocumentData>[]> {
+  const pageSize = 500;
+  const firstSnap: QuerySnapshot<DocumentData, DocumentData> = await getDocs(
+    query(collection(db, collectionName), limit(pageSize))
+  );
+  const allDocs: QueryDocumentSnapshot<DocumentData, DocumentData>[] = [
+    ...firstSnap.docs,
+  ];
+  if (firstSnap.docs.length < pageSize) {
+    return allDocs;
+  }
+
+  // Only paginate beyond 500 docs using ordered cursor; fall back gracefully if index is unavailable
+  try {
+    const pagedDocs: QueryDocumentSnapshot<DocumentData, DocumentData>[] = [];
+    let cursor: QueryDocumentSnapshot<DocumentData, DocumentData> | null = null;
+    for (let page = 0; page < 40; page++) {
+      const q: Query<DocumentData, DocumentData> = cursor
+        ? query(
+            collection(db, collectionName),
+            orderBy(documentId()),
+            startAfter(cursor),
+            limit(pageSize)
+          )
+        : query(
+            collection(db, collectionName),
+            orderBy(documentId()),
+            limit(pageSize)
+          );
+      const snap: QuerySnapshot<DocumentData, DocumentData> = await getDocs(q);
+      pagedDocs.push(...snap.docs);
+      if (snap.docs.length < pageSize) {
+        return pagedDocs;
+      }
+      cursor = snap.docs[snap.docs.length - 1];
+    }
+    return pagedDocs;
+  } catch {
+    return allDocs;
+  }
+}
+
+export async function deleteWorkspaceLetterFromVault(
+  letterId: string
+): Promise<void> {
+  const docId = sanitizeFirestoreId(letterId);
+  const path = `${LETTERS_COLLECTION}/${docId}`;
+  try {
+    await deleteDoc(doc(db, LETTERS_COLLECTION, docId));
+    syncedSignatureCache.delete(`${LETTERS_COLLECTION}:${docId}`);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, path);
+  }
+}
+
 export async function saveFullWorkspaceToFirestore(
   backup: FullWorkspaceBackup
 ): Promise<void> {
@@ -169,22 +234,33 @@ export async function saveFullWorkspaceToFirestore(
   const existingMediaIds = new Set<string>();
 
   try {
-    const [metaSnap, usersSnap, tplsSnap, lettersSnap, mediaSnap] =
+    const [metaSnap, userDocs, tplDocs, letterDocs, mediaDocs] =
       await Promise.all([
         getDoc(doc(db, META_COLLECTION, META_DOC_ID)),
-        getDocs(query(collection(db, USERS_COLLECTION), limit(500))),
-        getDocs(query(collection(db, TEMPLATES_COLLECTION), limit(500))),
-        getDocs(query(collection(db, LETTERS_COLLECTION), limit(500))),
-        getDocs(query(collection(db, MEDIA_COLLECTION), limit(500))),
+        fetchAllCollectionDocs(USERS_COLLECTION),
+        fetchAllCollectionDocs(TEMPLATES_COLLECTION),
+        fetchAllCollectionDocs(LETTERS_COLLECTION),
+        fetchAllCollectionDocs(MEDIA_COLLECTION),
       ]);
     metaExists = metaSnap.exists();
-    usersSnap.docs.forEach((d) => existingUserIds.add(d.id));
-    tplsSnap.docs.forEach((d) => existingTplIds.add(d.id));
-    lettersSnap.docs.forEach((d) => existingLetterIds.add(d.id));
-    mediaSnap.docs.forEach((d) => existingMediaIds.add(d.id));
+    userDocs.forEach((d) => existingUserIds.add(d.id));
+    tplDocs.forEach((d) => existingTplIds.add(d.id));
+    letterDocs.forEach((d) => existingLetterIds.add(d.id));
+    mediaDocs.forEach((d) => existingMediaIds.add(d.id));
   } catch (error) {
     handleFirestoreError(error, OperationType.LIST, META_COLLECTION);
   }
+
+  const normalizedDeletedIds = Array.from(
+    new Set(
+      (Array.isArray(backup.deletedLetterIds) ? backup.deletedLetterIds : [])
+        .filter((id): id is string => typeof id === "string" && id.trim().length > 0)
+        .map((id) => clampString(id.trim(), 128))
+    )
+  ).slice(-500);
+  const deletedLetterDocIds = new Set(
+    normalizedDeletedIds.map((id) => sanitizeFirestoreId(id))
+  );
 
   // 1. Save metadata document (native Maps & Lists, zero JSON strings)
   const metaPayload = {
@@ -197,6 +273,7 @@ export async function saveFullWorkspaceToFirestore(
     quickPhrases: stripUndefinedDeep((backup.quickPhrases || []).slice(0, 500)),
     plugins: stripUndefinedDeep((backup.plugins || []).slice(0, 200)),
     userUsage: stripUndefinedDeep(backup.userUsage || {}),
+    deletedLetterIds: normalizedDeletedIds,
   };
   await upsertDocWithKnownExistence(
     META_COLLECTION,
@@ -306,11 +383,10 @@ export async function saveFullWorkspaceToFirestore(
     }
   }
 
-  // 4. Sync workspace_letters (one doc per letter, delete removed)
-  const desiredLetterIds = new Set<string>();
+  // 4. Sync workspace_letters (one doc per letter; NEVER auto-delete unlisted letters — only delete explicitly deleted IDs)
   for (const ltr of backup.letters || []) {
     const docId = sanitizeFirestoreId(ltr.id);
-    desiredLetterIds.add(docId);
+    if (deletedLetterDocIds.has(docId)) continue;
     const letterPayload: Record<string, unknown> = {
       id: docId,
       templateType: clampString(ltr.templateType || "সাধারণ দাপ্তরিক পত্র", 300),
@@ -360,7 +436,7 @@ export async function saveFullWorkspaceToFirestore(
     );
   }
   for (const existingId of existingLetterIds) {
-    if (!desiredLetterIds.has(existingId)) {
+    if (deletedLetterDocIds.has(existingId)) {
       writeTasks.push(async () => {
         try {
           await deleteDoc(doc(db, LETTERS_COLLECTION, existingId));
@@ -416,22 +492,22 @@ export async function loadFullWorkspaceFromFirestore(): Promise<FullWorkspaceBac
   }
   const meta = metaSnap.data();
 
-  let userDocs;
-  let tplDocs;
-  let letterDocs;
-  let mediaDocs;
+  let userDocs: QueryDocumentSnapshot<DocumentData, DocumentData>[];
+  let tplDocs: QueryDocumentSnapshot<DocumentData, DocumentData>[];
+  let letterDocs: QueryDocumentSnapshot<DocumentData, DocumentData>[];
+  let mediaDocs: QueryDocumentSnapshot<DocumentData, DocumentData>[];
   try {
     [userDocs, tplDocs, letterDocs, mediaDocs] = await Promise.all([
-      getDocs(query(collection(db, USERS_COLLECTION), limit(500))),
-      getDocs(query(collection(db, TEMPLATES_COLLECTION), limit(500))),
-      getDocs(query(collection(db, LETTERS_COLLECTION), limit(500))),
-      getDocs(query(collection(db, MEDIA_COLLECTION), limit(500))),
+      fetchAllCollectionDocs(USERS_COLLECTION),
+      fetchAllCollectionDocs(TEMPLATES_COLLECTION),
+      fetchAllCollectionDocs(LETTERS_COLLECTION),
+      fetchAllCollectionDocs(MEDIA_COLLECTION),
     ]);
   } catch (error) {
     handleFirestoreError(error, OperationType.LIST, USERS_COLLECTION);
   }
 
-  const users: StoredUserBackup[] = userDocs.docs.map((d) => {
+  const users: StoredUserBackup[] = userDocs.map((d) => {
     const u = d.data();
     return {
       id: String(u.id || d.id),
@@ -449,7 +525,7 @@ export async function loadFullWorkspaceFromFirestore(): Promise<FullWorkspaceBac
     };
   });
 
-  const templates: LetterTemplate[] = tplDocs.docs.map((d) => {
+  const templates: LetterTemplate[] = tplDocs.map((d) => {
     const t = d.data();
     return {
       id: String(t.id || d.id),
@@ -471,7 +547,7 @@ export async function loadFullWorkspaceFromFirestore(): Promise<FullWorkspaceBac
     };
   });
 
-  const letters: SavedLetter[] = letterDocs.docs
+  const letters: SavedLetter[] = letterDocs
     .map((d) => {
       const l = d.data();
       return {
@@ -519,7 +595,7 @@ export async function loadFullWorkspaceFromFirestore(): Promise<FullWorkspaceBac
     );
 
   const mediaFiles: Record<string, string> = {};
-  for (const d of mediaDocs.docs) {
+  for (const d of mediaDocs) {
     const m = d.data();
     if (typeof m.filename === "string" && typeof m.base64Data === "string") {
       mediaFiles[m.filename] = m.base64Data;
@@ -544,6 +620,11 @@ export async function loadFullWorkspaceFromFirestore(): Promise<FullWorkspaceBac
     userUsage: (meta.userUsage || {}) as Record<string, UserUsageProfile>,
     users,
     letters,
+    deletedLetterIds: Array.isArray(meta.deletedLetterIds)
+      ? (meta.deletedLetterIds as unknown[]).filter(
+          (id): id is string => typeof id === "string"
+        )
+      : [],
     mediaFiles,
   };
 }

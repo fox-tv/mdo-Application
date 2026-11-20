@@ -22,11 +22,15 @@ export const LetterPreview: React.FC<LetterPreviewProps> = ({
   const activePad = branchPad && branchPad.enabled !== false ? branchPad : null;
   const brandColor = activePad?.accentColor || org.brandColor || "#1E3A8A";
   const effectiveOrgName = activePad?.orgNameOverride?.trim() || org.nameBn;
+  const effectiveNameEn = activePad?.nameEnOverride?.trim() || org.nameEn;
   const effectiveBranchTitle = activePad?.branchTitleBn?.trim() || "";
   const effectiveTagline = activePad?.headerTagline?.trim() || org.tagline;
+  const effectiveRegNumber = activePad?.regNumber?.trim() || org.regNumber;
   const effectiveAddress = activePad?.address?.trim() || org.address;
   const effectivePhone = activePad?.phone?.trim() || org.phone;
   const effectiveEmail = activePad?.email?.trim() || org.email;
+  const effectiveWebsite = activePad?.website?.trim() || org.website;
+  const effectiveCrestType = activePad?.crestType || org.crestType;
   const effectiveLogoUrl = activePad?.logoUrl?.trim() || org.logoDataUrl;
   const effectiveFooterNote = activePad?.footerNote?.trim() || "";
   const padSignatories = activePad?.signatories || [];
@@ -109,7 +113,7 @@ export const LetterPreview: React.FC<LetterPreviewProps> = ({
         />
       );
     }
-    return <CrestIcon type={org.crestType} color={brandColor} size={size} />;
+    return <CrestIcon type={effectiveCrestType} color={brandColor} size={size} />;
   };
 
   const renderMultiSignatoriesSection = () => {
@@ -317,9 +321,9 @@ export const LetterPreview: React.FC<LetterPreviewProps> = ({
                       {effectiveBranchTitle}
                     </p>
                   )}
-                  {org.nameEn && (
+                  {effectiveNameEn && (
                     <p className="text-[8pt] tracking-[0.14em] uppercase text-stone-500 mt-0.5 font-letter-sans">
-                      {org.nameEn}
+                      {effectiveNameEn}
                     </p>
                   )}
                   {effectiveTagline && (
@@ -335,8 +339,8 @@ export const LetterPreview: React.FC<LetterPreviewProps> = ({
                   <p className="tabular-nums">ফোন: {effectivePhone}</p>
                 )}
                 {effectiveEmail && <p>{effectiveEmail}</p>}
-                {org.regNumber && (
-                  <p className="text-stone-500 mt-0.5">{org.regNumber}</p>
+                {effectiveRegNumber && (
+                  <p className="text-stone-500 mt-0.5">{effectiveRegNumber}</p>
                 )}
               </div>
             </header>
@@ -363,9 +367,9 @@ export const LetterPreview: React.FC<LetterPreviewProps> = ({
                     {effectiveBranchTitle}
                   </p>
                 )}
-                {org.nameEn && (
+                {effectiveNameEn && (
                   <p className="text-[8pt] tracking-[0.16em] uppercase text-stone-500 mt-0.5 font-letter-sans">
-                    {org.nameEn}
+                    {effectiveNameEn}
                   </p>
                 )}
                 {effectiveTagline && (
@@ -375,10 +379,10 @@ export const LetterPreview: React.FC<LetterPreviewProps> = ({
                 )}
                 <div className="mt-1 flex flex-wrap items-center justify-center gap-x-2.5 gap-y-0.5 text-[8.5pt] text-stone-600 font-letter-sans">
                   {effectiveAddress && <span>{effectiveAddress}</span>}
-                  {org.regNumber && (
+                  {effectiveRegNumber && (
                     <>
                       <span aria-hidden="true">·</span>
-                      <span>{org.regNumber}</span>
+                      <span>{effectiveRegNumber}</span>
                     </>
                   )}
                 </div>
@@ -558,7 +562,7 @@ export const LetterPreview: React.FC<LetterPreviewProps> = ({
                 <span className="font-medium text-stone-600">
                   {effectiveFooterNote}
                 </span>
-                {(effectivePhone || effectiveEmail || org.website) && (
+                {(effectivePhone || effectiveEmail || effectiveWebsite) && (
                   <span aria-hidden="true">·</span>
                 )}
               </>
@@ -572,10 +576,10 @@ export const LetterPreview: React.FC<LetterPreviewProps> = ({
                 <span>ইমেইল: {effectiveEmail}</span>
               </>
             )}
-            {org.website && (
+            {effectiveWebsite && (
               <>
                 <span aria-hidden="true">·</span>
-                <span>ওয়েব: {org.website}</span>
+                <span>ওয়েব: {effectiveWebsite}</span>
               </>
             )}
           </div>
