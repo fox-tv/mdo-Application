@@ -192,6 +192,8 @@ export interface PluginConfigData {
   enforceDepartmentDefault?: boolean;
   userTemplateRules?: Record<string, UserTemplateAccessRule>;
   branchPads?: Record<string, BranchPadConfig>;
+  userPads?: Record<string, BranchPadConfig>;
+  allowUserSelfPadCustomize?: boolean;
 }
 
 export interface SitePlugin {

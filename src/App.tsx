@@ -46,7 +46,12 @@ import {
   formatBengaliDate,
   generateNextRefNumber,
 } from "./utils/bengali";
-import { resolveBranchPadForDepartment } from "./utils/branchPad";
+import {
+  isBranchPadPluginEnabled,
+  isUserSelfPadCustomizeEnabled,
+  resolveActivePadForUser,
+} from "./utils/branchPad";
+import { buildAppPath, getAppBasePath, parseAppRoute } from "./utils/router";
 import {
   auth,
   deleteLetterFromCloud,
@@ -252,8 +257,16 @@ export default function App() {
   });
   const [savedLetters, setSavedLetters] = useState<SavedLetter[]>([]);
 
-  const [activeTab, setActiveTab] = useState<AppTab>("dashboard");
-  const [adminInitialTab, setAdminInitialTab] = useState<AdminTab>("site");
+  const initialParsedRoute =
+    typeof window !== "undefined"
+      ? parseAppRoute(window.location.pathname)
+      : { tab: null };
+  const [activeTab, setActiveTab] = useState<AppTab>(
+    initialParsedRoute.tab || "dashboard"
+  );
+  const [adminInitialTab, setAdminInitialTab] = useState<AdminTab>(
+    initialParsedRoute.adminTab || "site"
+  );
   const [currentLetter, setCurrentLetter] = useState<LetterData>(() =>
     createLetterFromTemplate(LETTER_TEMPLATES[0], DEFAULT_ORGANIZATION)
   );
@@ -517,12 +530,14 @@ export default function App() {
           ws.user.department && ws.user.department !== "সকল বিভাগ"
             ? ws.user.department
             : ws.templates[0]?.category;
-        const defaultBranchPad = resolveBranchPadForDepartment(
-          resolvedPlugins,
-          preferredDept
-        );
-        const branchDeptForFirst =
-          defaultBranchPad && preferredDept ? preferredDept : undefined;
+        const resolvedActivePad = resolveActivePadForUser({
+          plugins: resolvedPlugins,
+          userId: ws.user.userId,
+          preferredDepartment: preferredDept,
+          userDepartment: ws.user.department,
+        });
+        const defaultBranchPad = resolvedActivePad.config;
+        const branchDeptForFirst = resolvedActivePad.scopeKey;
         const activeFirstSignatory =
           defaultBranchPad?.signatories &&
           defaultBranchPad.signatories.length > 0
@@ -591,22 +606,72 @@ export default function App() {
             ws.siteConfig.defaultLetterFont || "sutonnymj";
         }
 
-        const restoredDraft = loadLocalEditorDraft(ws.user.userId);
-        if (restoredDraft) {
-          setCurrentLetter(restoredDraft.letter);
-          setDraftNeedsSync(restoredDraft.dirty);
-        } else {
-          setCurrentLetter(firstLetter);
-          setDraftNeedsSync(false);
+        const userSelfPadEnabled =
+          isBranchPadPluginEnabled(resolvedPlugins) &&
+          isUserSelfPadCustomizeEnabled(resolvedPlugins);
+        const canOpenOrgOnBoot =
+          ws.user.role === "admin" ||
+          Boolean(ws.siteConfig.allowUserOrgEdit) ||
+          userSelfPadEnabled;
+
+        const routeNow = parseAppRoute(window.location.pathname);
+        let initialMatchedLetter: SavedLetter | undefined;
+        if (routeNow.tab === "editor" && routeNow.letterId) {
+          initialMatchedLetter = resolvedLetters.find(
+            (l) => l.id === routeNow.letterId
+          );
         }
 
-        const restoredTab = loadActiveTabPreference(
-          ws.user.userId,
-          ws.user.role,
-          Boolean(ws.siteConfig.allowUserOrgEdit)
-        );
-        if (restoredTab) {
-          setActiveTab(restoredTab);
+        if (initialMatchedLetter) {
+          setCurrentLetter({ ...initialMatchedLetter });
+          setDraftNeedsSync(false);
+          saveLocalEditorDraft(ws.user.userId, initialMatchedLetter, false);
+        } else {
+          const restoredDraft = loadLocalEditorDraft(ws.user.userId);
+          if (restoredDraft) {
+            setCurrentLetter(restoredDraft.letter);
+            setDraftNeedsSync(restoredDraft.dirty);
+          } else {
+            setCurrentLetter(firstLetter);
+            setDraftNeedsSync(false);
+          }
+        }
+
+        let targetTab: AppTab = "dashboard";
+        let targetAdminTab: AdminTab | undefined;
+        if (routeNow.tab) {
+          if (routeNow.tab === "admin" && ws.user.role !== "admin") {
+            targetTab = "dashboard";
+          } else if (routeNow.tab === "organization" && !canOpenOrgOnBoot) {
+            targetTab = "dashboard";
+          } else {
+            targetTab = routeNow.tab;
+            targetAdminTab = routeNow.adminTab;
+          }
+        } else {
+          const restoredTab = loadActiveTabPreference(
+            ws.user.userId,
+            ws.user.role,
+            canOpenOrgOnBoot
+          );
+          if (restoredTab) {
+            targetTab = restoredTab;
+          }
+        }
+
+        setActiveTab(targetTab);
+        if (targetTab === "admin" && targetAdminTab) {
+          setAdminInitialTab(targetAdminTab);
+        }
+        const canonicalPath = buildAppPath(targetTab, {
+          adminTab: targetTab === "admin" ? targetAdminTab : undefined,
+          letterId:
+            targetTab === "editor" && initialMatchedLetter
+              ? initialMatchedLetter.id
+              : undefined,
+        });
+        if (window.location.pathname !== canonicalPath) {
+          window.history.replaceState(null, "", canonicalPath);
         }
       } else {
         setUser(null);
@@ -920,17 +985,106 @@ export default function App() {
   // Ensure activeTab remains valid if admin restricts permissions
   useEffect(() => {
     if (!user) return;
+    const allowSelfPad =
+      isBranchPadPluginEnabled(plugins) &&
+      isUserSelfPadCustomizeEnabled(plugins);
     if (activeTab === "admin" && user.role !== "admin") {
       setActiveTab("dashboard");
+      window.history.replaceState(null, "", buildAppPath("dashboard"));
     }
     if (
       activeTab === "organization" &&
       user.role !== "admin" &&
-      !siteConfig.allowUserOrgEdit
+      !siteConfig.allowUserOrgEdit &&
+      !allowSelfPad
     ) {
       setActiveTab("dashboard");
+      window.history.replaceState(null, "", buildAppPath("dashboard"));
     }
-  }, [activeTab, user, siteConfig.allowUserOrgEdit]);
+  }, [activeTab, user, siteConfig.allowUserOrgEdit, plugins]);
+
+  const navigateTo = useCallback(
+    (
+      nextTab: AppTab,
+      options?: { adminTab?: AdminTab; letterId?: string; replace?: boolean }
+    ) => {
+      const allowSelfPad =
+        isBranchPadPluginEnabled(plugins) &&
+        isUserSelfPadCustomizeEnabled(plugins);
+      let resolvedTab = nextTab;
+      if (resolvedTab === "admin" && user?.role !== "admin") {
+        resolvedTab = "dashboard";
+      }
+      if (
+        resolvedTab === "organization" &&
+        user?.role !== "admin" &&
+        !siteConfig.allowUserOrgEdit &&
+        !allowSelfPad
+      ) {
+        resolvedTab = "dashboard";
+      }
+
+      if (resolvedTab === "admin" && options?.adminTab) {
+        setAdminInitialTab(options.adminTab);
+      }
+      setActiveTab(resolvedTab);
+
+      if (user) {
+        const nextUrl = buildAppPath(resolvedTab, {
+          adminTab:
+            resolvedTab === "admin"
+              ? options?.adminTab || adminInitialTab
+              : undefined,
+          letterId: resolvedTab === "editor" ? options?.letterId : undefined,
+        });
+        if (window.location.pathname !== nextUrl) {
+          if (options?.replace) {
+            window.history.replaceState(null, "", nextUrl);
+          } else {
+            window.history.pushState(null, "", nextUrl);
+          }
+        }
+      }
+    },
+    [user, plugins, siteConfig.allowUserOrgEdit, adminInitialTab]
+  );
+
+  // Sync browser Back / Forward navigation with clean slash URLs
+  useEffect(() => {
+    if (!user) return;
+    const handlePopState = () => {
+      const parsed = parseAppRoute(window.location.pathname);
+      const allowSelfPad =
+        isBranchPadPluginEnabled(plugins) &&
+        isUserSelfPadCustomizeEnabled(plugins);
+      let nextTab: AppTab = parsed.tab || "dashboard";
+      if (nextTab === "admin" && user.role !== "admin") {
+        nextTab = "dashboard";
+      }
+      if (
+        nextTab === "organization" &&
+        user.role !== "admin" &&
+        !siteConfig.allowUserOrgEdit &&
+        !allowSelfPad
+      ) {
+        nextTab = "dashboard";
+      }
+      if (nextTab === "admin" && parsed.adminTab) {
+        setAdminInitialTab(parsed.adminTab);
+      }
+      if (nextTab === "editor" && parsed.letterId) {
+        const found = savedLetters.find((l) => l.id === parsed.letterId);
+        if (found) {
+          setCurrentLetter({ ...found });
+          setDraftNeedsSync(false);
+          saveLocalEditorDraft(user.userId, found, false);
+        }
+      }
+      setActiveTab(nextTab);
+    };
+    window.addEventListener("popstate", handlePopState);
+    return () => window.removeEventListener("popstate", handlePopState);
+  }, [user, plugins, siteConfig.allowUserOrgEdit, savedLetters]);
 
   // Persist active tab per user so reload returns user directly to EditorView
   useEffect(() => {
@@ -965,6 +1119,11 @@ export default function App() {
     setUser(null);
     setActiveTab("dashboard");
     setDraftNeedsSync(false);
+    try {
+      window.history.replaceState(null, "", getAppBasePath() || "/");
+    } catch {
+      // Ignore history error
+    }
     try {
       sessionStorage.removeItem("mdo_admin_ai_messages");
     } catch {
@@ -1058,20 +1217,14 @@ export default function App() {
   );
 
   const handleSelectTemplate = (template: LetterTemplate) => {
-    const categoryPad = resolveBranchPadForDepartment(plugins, template.category);
-    const userDept =
-      user?.department && user.department !== "সকল বিভাগ"
-        ? user.department
-        : undefined;
-    const userPad = !categoryPad
-      ? resolveBranchPadForDepartment(plugins, userDept)
-      : null;
-    const resolvedPad = categoryPad || userPad;
-    const resolvedDept = categoryPad
-      ? template.category
-      : userPad
-        ? userDept
-        : undefined;
+    const resolved = resolveActivePadForUser({
+      plugins,
+      userId: user?.userId,
+      preferredDepartment: template.category,
+      userDepartment: user?.department,
+    });
+    const resolvedPad = resolved.config;
+    const resolvedDept = resolved.scopeKey;
     const next = createLetterFromTemplate(
       template,
       org,
@@ -1087,7 +1240,7 @@ export default function App() {
     if (user) {
       saveLocalEditorDraft(user.userId, next, false);
     }
-    setActiveTab("editor");
+    navigateTo("editor");
 
     void apiRequest<{ userUsage: UserUsageProfile }>("/api/usage/track", {
       method: "POST",
@@ -1133,11 +1286,13 @@ export default function App() {
 
   const handleStartNewLetter = () => {
     const today = new Date();
-    const userDept =
-      user?.department && user.department !== "সকল বিভাগ"
-        ? user.department
-        : undefined;
-    const branchPad = resolveBranchPadForDepartment(plugins, userDept);
+    const resolved = resolveActivePadForUser({
+      plugins,
+      userId: user?.userId,
+      userDepartment: user?.department,
+    });
+    const branchPad = resolved.config;
+    const resolvedScope = resolved.scopeKey;
     const primarySig =
       branchPad?.signatories && branchPad.signatories.length > 0
         ? branchPad.signatories[branchPad.signatories.length - 1]
@@ -1179,14 +1334,14 @@ export default function App() {
         currentLetter.letterFont,
       showWatermark: currentLetter.showWatermark,
       showSealPlaceholder: currentLetter.showSealPlaceholder,
-      ...(branchPad && userDept ? { branchPadDepartment: userDept } : {}),
+      ...(resolvedScope ? { branchPadDepartment: resolvedScope } : {}),
     };
     setCurrentLetter(nextDraft);
     setDraftNeedsSync(false);
     if (user) {
       saveLocalEditorDraft(user.userId, nextDraft, false);
     }
-    setActiveTab("editor");
+    navigateTo("editor");
   };
 
   const handleSaveLetter = async (
@@ -1217,6 +1372,12 @@ export default function App() {
       }
     }
     setDraftNeedsSync(false);
+    if (activeTab === "editor" && !options?.keepalive) {
+      const savedPath = buildAppPath("editor", { letterId: entry.id });
+      if (window.location.pathname !== savedPath) {
+        window.history.replaceState(null, "", savedPath);
+      }
+    }
     if (firebaseUser && user?.role === "admin") {
       void saveLetterToCloud(entry, firebaseUser.uid, user.fullName).catch(() => {});
     }
@@ -1230,7 +1391,7 @@ export default function App() {
     if (user) {
       saveLocalEditorDraft(user.userId, copy, false);
     }
-    setActiveTab("editor");
+    navigateTo("editor", { letterId: saved.id });
   };
 
   const handleDuplicateSaved = async (saved: SavedLetter) => {
@@ -1314,11 +1475,13 @@ export default function App() {
 
   const handleCreateLetterFromVoice = (contentText: string, titleHint?: string) => {
     const today = new Date();
-    const userDept =
-      user?.department && user.department !== "সকল বিভাগ"
-        ? user.department
-        : undefined;
-    const branchPad = resolveBranchPadForDepartment(plugins, userDept);
+    const resolved = resolveActivePadForUser({
+      plugins,
+      userId: user?.userId,
+      userDepartment: user?.department,
+    });
+    const branchPad = resolved.config;
+    const resolvedScope = resolved.scopeKey;
     const primarySig =
       branchPad?.signatories && branchPad.signatories.length > 0
         ? branchPad.signatories[branchPad.signatories.length - 1]
@@ -1360,19 +1523,18 @@ export default function App() {
         currentLetter.letterFont,
       showWatermark: currentLetter.showWatermark,
       showSealPlaceholder: currentLetter.showSealPlaceholder,
-      ...(branchPad && userDept ? { branchPadDepartment: userDept } : {}),
+      ...(resolvedScope ? { branchPadDepartment: resolvedScope } : {}),
     };
     setCurrentLetter(voiceDraft);
     setDraftNeedsSync(true);
     if (user) {
       saveLocalEditorDraft(user.userId, voiceDraft, true);
     }
-    setActiveTab("editor");
+    navigateTo("editor");
   };
 
   const openAdminSection = (subTab: AdminTab) => {
-    setAdminInitialTab(subTab);
-    setActiveTab("admin");
+    navigateTo("admin", { adminTab: subTab });
     setUserMenuOpen(false);
   };
 
@@ -1406,6 +1568,10 @@ export default function App() {
   const labels = siteConfig.navLabels || DEFAULT_SITE_CONFIG.navLabels;
 
   const canEditOrg = user.role === "admin" || siteConfig.allowUserOrgEdit;
+  const userSelfPadActive =
+    isBranchPadPluginEnabled(plugins) &&
+    isUserSelfPadCustomizeEnabled(plugins);
+  const canOpenOrgTab = canEditOrg || userSelfPadActive;
   const canManageTemplates =
     user.role === "admin" || siteConfig.allowUserTemplateCreate;
 
@@ -1430,10 +1596,10 @@ export default function App() {
     { id: "saved", label: labels.saved || "সংরক্ষিত" },
     { id: "voice", label: labels.voice || "ভয়েস এআই" },
   ];
-  if (canEditOrg) {
+  if (canOpenOrgTab) {
     navItems.push({
       id: "organization",
-      label: labels.organization || "প্রতিষ্ঠান",
+      label: canEditOrg ? labels.organization || "প্রতিষ্ঠান" : "আমার প্যাড",
     });
   }
   if (user.role === "admin") {
@@ -1454,7 +1620,7 @@ export default function App() {
           {/* Zone 1: Brand Wordmark */}
           <button
             type="button"
-            onClick={() => setActiveTab("dashboard")}
+            onClick={() => navigateTo("dashboard")}
             style={{ color: primaryColor }}
             className="text-base sm:text-xl font-bold tracking-tight font-letter-serif truncate min-w-0 cursor-pointer text-left"
           >
@@ -1472,7 +1638,7 @@ export default function App() {
                 <button
                   key={item.id}
                   type="button"
-                  onClick={() => setActiveTab(item.id)}
+                  onClick={() => navigateTo(item.id)}
                   style={isActive ? { borderColor: primaryColor } : undefined}
                   className={`py-1 whitespace-nowrap shrink-0 border-b-2 transition-colors cursor-pointer ${
                     isActive
@@ -1535,7 +1701,7 @@ export default function App() {
                     role="menuitem"
                     onClick={() => {
                       setUserMenuOpen(false);
-                      setActiveTab("dashboard");
+                      navigateTo("dashboard");
                     }}
                     className="w-full px-4 py-2.5 text-left text-xs font-medium text-stone-800 hover:bg-stone-50 flex items-center gap-2 cursor-pointer"
                   >
@@ -1548,7 +1714,7 @@ export default function App() {
                     role="menuitem"
                     onClick={() => {
                       setUserMenuOpen(false);
-                      setActiveTab("voice");
+                      navigateTo("voice");
                     }}
                     className="w-full px-4 py-2.5 text-left text-xs font-medium text-stone-800 hover:bg-stone-50 flex items-center gap-2 cursor-pointer"
                   >
@@ -1670,7 +1836,7 @@ export default function App() {
               <button
                 key={item.id}
                 type="button"
-                onClick={() => setActiveTab(item.id)}
+                onClick={() => navigateTo(item.id)}
                 style={
                   isActive
                     ? { borderColor: primaryColor, color: primaryColor }
@@ -1750,6 +1916,7 @@ export default function App() {
             quickPhrases={quickPhrases}
             plugins={plugins}
             userDepartment={user.department}
+            currentUserId={user.userId}
             pluginSnippets={pluginSnippets}
             allowAiDrafting={siteConfig.allowAiDrafting}
             isSavedOnServer={savedLetters.some((l) => l.id === currentLetter.id)}
@@ -1758,6 +1925,9 @@ export default function App() {
             onSaveLetter={handleSaveLetter}
             onDraftSynced={() => setDraftNeedsSync(false)}
             onApplyTemplate={handleApplyTemplateById}
+            onOpenPadCustomizer={
+              canOpenOrgTab ? () => navigateTo("organization") : undefined
+            }
           />
         )}
         <Suspense
@@ -1797,8 +1967,8 @@ export default function App() {
               onDuplicateLetter={handleDuplicateSaved}
               onDeleteLetter={handleDeleteSaved}
               onOpenPluginStudio={() => openAdminSection("plugins")}
-              onViewTemplates={() => setActiveTab("templates")}
-              onViewRecentDocuments={() => setActiveTab("saved")}
+              onViewTemplates={() => navigateTo("templates")}
+              onViewRecentDocuments={() => navigateTo("saved")}
             />
           )}
           {activeTab === "templates" && (
@@ -1853,7 +2023,7 @@ export default function App() {
               onCreateLetterFromVoice={handleCreateLetterFromVoice}
             />
           )}
-          {activeTab === "organization" && canEditOrg && (
+          {activeTab === "organization" && canOpenOrgTab && (
             <OrganizationView
               org={org}
               departments={departments}
@@ -1861,6 +2031,9 @@ export default function App() {
               canEdit={canEditOrg}
               userRole={user.role}
               userDepartment={user.department}
+              currentUserId={user.userId}
+              currentUserFullName={user.fullName}
+              currentUserDesignation={user.designation}
               uiTexts={siteConfig.uiTexts}
               onSaveOrg={handleSaveOrg}
               onPluginsUpdated={(nextPlugins) => {
@@ -1966,8 +2139,11 @@ export default function App() {
                 setSavedLetters(restored.letters);
                 scheduleVaultSync();
               }}
-              onOpenOrgTab={() => setActiveTab("organization")}
-              onNavigateTab={setActiveTab}
+              onOpenOrgTab={() => navigateTo("organization")}
+              onNavigateTab={(t) => navigateTo(t)}
+              onTabChange={(subTab) =>
+                navigateTo("admin", { adminTab: subTab })
+              }
               onOpenLetter={handleLoadSaved}
               onDeleteLetter={handleDeleteSaved}
             />

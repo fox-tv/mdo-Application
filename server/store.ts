@@ -46,7 +46,7 @@ export interface AppDatabase {
   deletedLetterIds?: string[];
 }
 
-const CURRENT_SCHEMA_VERSION = 6;
+const CURRENT_SCHEMA_VERSION = 7;
 const DATA_DIR = path.resolve(process.cwd(), "data");
 const MEDIA_DIR = path.join(DATA_DIR, "media");
 const DB_PATH = path.join(DATA_DIR, "app-store.json");
@@ -182,20 +182,36 @@ export function getDb(): AppDatabase {
           departments.splice(1, 0, { ...auditDept });
         }
 
-        // Seed Audit templates if not already present
+        // Seed Audit templates and Incentive Allowance template if not already present
         for (const tpl of LETTER_TEMPLATES) {
           if (
-            tpl.id.startsWith("tpl-audit-") &&
+            (tpl.id.startsWith("tpl-audit-") ||
+              tpl.id === "tpl-ngo-incentive-allowance") &&
             !templates.some((t) => t.id === tpl.id)
           ) {
             templates.push({ ...tpl });
           }
         }
 
-        // Ensure all built-in plugins exist
+        // Ensure all built-in plugins exist and upgrade branch-pad-designer config defaults
         for (const pl of DEFAULT_PLUGINS) {
-          if (!plugins.some((existing) => existing.id === pl.id)) {
+          const existingIdx = plugins.findIndex((existing) => existing.id === pl.id);
+          if (existingIdx < 0) {
             plugins.push({ ...pl, config: { ...pl.config } });
+          } else if (pl.type === "branch-pad-designer") {
+            const cur = plugins[existingIdx];
+            plugins[existingIdx] = {
+              ...cur,
+              name: pl.name,
+              description: pl.description,
+              config: {
+                ...(cur.config || {}),
+                branchPads: cur.config?.branchPads || {},
+                userPads: cur.config?.userPads || {},
+                allowUserSelfPadCustomize:
+                  cur.config?.allowUserSelfPadCustomize !== false,
+              },
+            };
           }
         }
       }

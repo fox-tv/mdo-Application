@@ -9,6 +9,7 @@ import {
   Save,
   Trash2,
   Upload,
+  User as UserIcon,
   X,
 } from "lucide-react";
 import { BRAND_COLOR_OPTIONS, DEFAULT_ORGANIZATION } from "../data/templates";
@@ -28,7 +29,11 @@ import { toBengaliDigits } from "../utils/bengali";
 import {
   createDefaultBranchPadConfig,
   getBranchPadMap,
+  getUserPadMap,
   isBranchPadPluginEnabled,
+  isUserSelfPadCustomizeEnabled,
+  makeUserPadKey,
+  parseUserPadKey,
 } from "../utils/branchPad";
 import { CrestIcon } from "./CrestIcon";
 
@@ -39,6 +44,9 @@ interface OrganizationViewProps {
   canEdit: boolean;
   userRole?: UserRole;
   userDepartment?: string;
+  currentUserId?: string;
+  currentUserFullName?: string;
+  currentUserDesignation?: string;
   uiTexts?: Record<string, string>;
   onSaveOrg: (updated: OrganizationProfile) => Promise<void>;
   onPluginsUpdated?: (plugins: SitePlugin[]) => void;
@@ -79,15 +87,30 @@ export const OrganizationView: React.FC<OrganizationViewProps> = ({
   canEdit,
   userRole = "user",
   userDepartment = "",
+  currentUserId = "",
+  currentUserFullName = "",
+  currentUserDesignation = "",
   uiTexts,
   onSaveOrg,
   onPluginsUpdated,
   onOpenBranchPadPlugin,
 }) => {
   const branchPluginEnabled = isBranchPadPluginEnabled(plugins);
+  const allowSelfUserPad =
+    branchPluginEnabled &&
+    Boolean(currentUserId) &&
+    (userRole === "admin" || isUserSelfPadCustomizeEnabled(plugins));
   const branchPadsMap = useMemo(() => getBranchPadMap(plugins), [plugins]);
+  const userPadsMap = useMemo(() => getUserPadMap(plugins), [plugins]);
+  const personalScopeKey = useMemo(
+    () => (currentUserId ? makeUserPadKey(currentUserId) : ""),
+    [currentUserId]
+  );
 
   const initialScope = useMemo(() => {
+    if (allowSelfUserPad && personalScopeKey && (!canEdit || userPadsMap[currentUserId])) {
+      return personalScopeKey;
+    }
     if (
       branchPluginEnabled &&
       userRole !== "admin" &&
@@ -98,7 +121,17 @@ export const OrganizationView: React.FC<OrganizationViewProps> = ({
       return userDepartment;
     }
     return "__global__";
-  }, [branchPluginEnabled, userRole, userDepartment, departments]);
+  }, [
+    allowSelfUserPad,
+    personalScopeKey,
+    canEdit,
+    userPadsMap,
+    currentUserId,
+    branchPluginEnabled,
+    userRole,
+    userDepartment,
+    departments,
+  ]);
 
   const [selectedScope, setSelectedScope] = useState<string>(initialScope);
   const [draft, setDraft] = useState<OrganizationProfile>(org);
@@ -123,8 +156,39 @@ export const OrganizationView: React.FC<OrganizationViewProps> = ({
     }
   }, [branchPluginEnabled, selectedScope]);
 
+  const selectedUserPadId = useMemo(
+    () => parseUserPadKey(selectedScope),
+    [selectedScope]
+  );
+
   useEffect(() => {
     if (selectedScope === "__global__") return;
+    if (selectedUserPadId) {
+      const baseDefault = createDefaultBranchPadConfig(
+        currentUserFullName || selectedUserPadId,
+        org,
+        {
+          isUserPad: true,
+          userFullName: currentUserFullName,
+          userDesignation: currentUserDesignation,
+          userDepartment,
+        }
+      );
+      const saved = userPadsMap[selectedUserPadId];
+      if (saved) {
+        setBranchDraft({
+          ...baseDefault,
+          ...saved,
+          signatories: Array.isArray(saved.signatories)
+            ? saved.signatories.map((s) => ({ ...s }))
+            : [],
+        });
+      } else {
+        setBranchDraft(baseDefault);
+      }
+      return;
+    }
+
     const saved = branchPadsMap[selectedScope];
     if (saved) {
       setBranchDraft({
@@ -137,16 +201,34 @@ export const OrganizationView: React.FC<OrganizationViewProps> = ({
     } else {
       setBranchDraft(createDefaultBranchPadConfig(selectedScope, org));
     }
-  }, [selectedScope, branchPadsMap, org]);
+  }, [
+    selectedScope,
+    selectedUserPadId,
+    branchPadsMap,
+    userPadsMap,
+    org,
+    currentUserFullName,
+    currentUserDesignation,
+    userDepartment,
+  ]);
 
   const isGlobalScope = selectedScope === "__global__";
-  const canEditSelectedScope =
-    canEdit &&
-    (userRole === "admin" ||
-      isGlobalScope ||
-      !userDepartment ||
-      userDepartment === "সকল বিভাগ" ||
-      userDepartment === selectedScope);
+  const isUserScope = Boolean(selectedUserPadId);
+  const scopeLabel = isGlobalScope
+    ? "মূল প্রতিষ্ঠানের তথ্য"
+    : isUserScope
+      ? `আমার নিজস্ব প্যাড (${currentUserFullName || selectedUserPadId})`
+      : selectedScope;
+
+  const canEditSelectedScope = isUserScope
+    ? userRole === "admin" ||
+      (allowSelfUserPad && selectedUserPadId === currentUserId)
+    : canEdit &&
+      (userRole === "admin" ||
+        isGlobalScope ||
+        !userDepartment ||
+        userDepartment === "সকল বিভাগ" ||
+        userDepartment === selectedScope);
 
   const update = <K extends keyof OrganizationProfile>(
     key: K,
@@ -231,9 +313,11 @@ export const OrganizationView: React.FC<OrganizationViewProps> = ({
     const item: BranchPadSignatory = {
       id: `sig-${Date.now()}-${branchDraft.signatories.length + 1}`,
       roleLabel: "স্বাক্ষরকারী",
-      name: "",
-      title: "",
-      department: selectedScope,
+      name: isUserScope ? currentUserFullName || "" : "",
+      title: isUserScope ? currentUserDesignation || "" : "",
+      department: isUserScope
+        ? userDepartment || org.defaultSignatoryDept
+        : selectedScope,
       signatureUrl: "",
     };
     setBranchDraft((prev) => ({
@@ -273,6 +357,16 @@ export const OrganizationView: React.FC<OrganizationViewProps> = ({
       if (isGlobalScope) {
         await onSaveOrg(draft);
         showToast("মূল প্রতিষ্ঠানের তথ্য সফলভাবে সংরক্ষিত");
+      } else if (selectedUserPadId) {
+        const res = await apiRequest<{ plugins: SitePlugin[] }>(
+          `/api/user-pads/${encodeURIComponent(selectedUserPadId)}`,
+          {
+            method: "PUT",
+            body: JSON.stringify(branchDraft),
+          }
+        );
+        onPluginsUpdated?.(res.plugins);
+        showToast("আপনার ব্যক্তিগত প্যাড সফলভাবে সংরক্ষিত হয়েছে");
       } else {
         const res = await apiRequest<{ plugins: SitePlugin[] }>(
           `/api/branch-pads/${encodeURIComponent(selectedScope)}`,
@@ -315,6 +409,37 @@ export const OrganizationView: React.FC<OrganizationViewProps> = ({
       return;
     }
 
+    if (selectedUserPadId) {
+      setIsSaving(true);
+      try {
+        const res = await apiRequest<{ plugins: SitePlugin[] }>(
+          `/api/user-pads/${encodeURIComponent(selectedUserPadId)}`,
+          { method: "DELETE" }
+        );
+        onPluginsUpdated?.(res.plugins);
+        setBranchDraft(
+          createDefaultBranchPadConfig(
+            currentUserFullName || selectedUserPadId,
+            org,
+            {
+              isUserPad: true,
+              userFullName: currentUserFullName,
+              userDesignation: currentUserDesignation,
+              userDepartment,
+            }
+          )
+        );
+        showToast("আপনার ব্যক্তিগত প্যাড মূল/শাখা প্যাডে ফিরেছে");
+      } catch (err: unknown) {
+        setErrorMsg(
+          err instanceof Error ? err.message : "প্যাড রিসেট করা যায়নি।"
+        );
+      } finally {
+        setIsSaving(false);
+      }
+      return;
+    }
+
     setIsSaving(true);
     try {
       const res = await apiRequest<{ plugins: SitePlugin[] }>(
@@ -341,7 +466,9 @@ export const OrganizationView: React.FC<OrganizationViewProps> = ({
     : branchDraft.orgNameOverride?.trim() || org.nameBn;
   const previewBranchTitle = isGlobalScope
     ? ""
-    : branchDraft.branchTitleBn?.trim() || selectedScope;
+    : isUserScope
+      ? branchDraft.branchTitleBn?.trim() || ""
+      : branchDraft.branchTitleBn?.trim() || selectedScope;
   const previewNameEn = isGlobalScope
     ? draft.nameEn
     : branchDraft.nameEnOverride?.trim() || org.nameEn;
@@ -410,15 +537,17 @@ export const OrganizationView: React.FC<OrganizationViewProps> = ({
                   ? "সংরক্ষণ হচ্ছে..."
                   : isGlobalScope
                     ? "মূল তথ্য সংরক্ষণ করুন"
-                    : "শাখার প্যাড সংরক্ষণ করুন"}
+                    : isUserScope
+                      ? "আমার প্যাড সংরক্ষণ করুন"
+                      : "শাখার প্যাড সংরক্ষণ করুন"}
               </span>
             </button>
           </div>
         )}
       </div>
 
-      {/* Per-Branch Organization & Pad Configuration Switcher (Plugin) */}
-      {branchPluginEnabled && departments.length > 0 && (
+      {/* Per-User & Per-Branch Organization & Pad Configuration Switcher (Plugin) */}
+      {branchPluginEnabled && (departments.length > 0 || allowSelfUserPad) && (
         <div
           data-section="org-branch-plugin-bar"
           className="mt-5 bg-white border border-stone-200 rounded-xl p-4 space-y-3"
@@ -427,7 +556,7 @@ export const OrganizationView: React.FC<OrganizationViewProps> = ({
             <div className="flex items-center gap-2">
               <Building2 className="w-4 h-4 text-[#1E3A8A]" />
               <span className="text-xs font-semibold text-stone-900">
-                শাখাভিত্তিক প্রতিষ্ঠানের তথ্য ও প্যাড প্লাগইন
+                ইউজার ও শাখাভিত্তিক প্যাড কাস্টমাইজেশন প্লাগইন
               </span>
               <span className="text-[11px] text-emerald-700 font-semibold">
                 · সক্রিয়
@@ -440,40 +569,22 @@ export const OrganizationView: React.FC<OrganizationViewProps> = ({
                 className="inline-flex items-center gap-1.5 text-xs font-medium text-[#1E3A8A] hover:underline cursor-pointer self-start sm:self-auto"
               >
                 <Puzzle className="w-3.5 h-3.5" />
-                <span>শাখা প্যাড স্টুডিও (পূর্ণ A4 প্রিভিউ)</span>
+                <span>ইউজার ও শাখা প্যাড স্টুডিও (পূর্ণ A4 প্রিভিউ)</span>
               </button>
             )}
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2">
-            <button
-              type="button"
-              onClick={() => setSelectedScope("__global__")}
-              className={`text-left px-3 py-2.5 rounded-lg border transition-colors cursor-pointer ${
-                selectedScope === "__global__"
-                  ? "border-[#1E3A8A] bg-[#1E3A8A]/5 text-[#1E3A8A]"
-                  : "border-stone-200 bg-stone-50/50 text-stone-700 hover:bg-stone-50"
-              }`}
-            >
-              <p className="text-xs font-semibold truncate">
-                মূল প্রতিষ্ঠানের তথ্য (ডিফল্ট)
-              </p>
-              <p className="text-[11px] text-stone-500 mt-0.5 truncate">
-                {org.nameBn}
-              </p>
-            </button>
-
-            {departments.map((dept) => {
-              const savedPad = branchPadsMap[dept.name];
-              const isCustomized = Boolean(
-                savedPad && savedPad.enabled !== false
+            {allowSelfUserPad && personalScopeKey && (() => {
+              const mySavedPad = userPadsMap[currentUserId];
+              const isMyPadCustomized = Boolean(
+                mySavedPad && mySavedPad.enabled !== false
               );
-              const isSelected = selectedScope === dept.name;
+              const isSelected = selectedScope === personalScopeKey;
               return (
                 <button
-                  key={dept.id}
                   type="button"
-                  onClick={() => setSelectedScope(dept.name)}
+                  onClick={() => setSelectedScope(personalScopeKey)}
                   className={`text-left px-3 py-2.5 rounded-lg border transition-colors cursor-pointer ${
                     isSelected
                       ? "border-[#1E3A8A] bg-[#1E3A8A]/5 text-[#1E3A8A]"
@@ -481,36 +592,95 @@ export const OrganizationView: React.FC<OrganizationViewProps> = ({
                   }`}
                 >
                   <div className="flex items-center justify-between gap-1.5">
-                    <span className="text-xs font-semibold truncate">
-                      {dept.name}
+                    <span className="inline-flex items-center gap-1 text-xs font-semibold truncate">
+                      <UserIcon className="w-3.5 h-3.5 shrink-0" />
+                      <span className="truncate">আমার নিজস্ব প্যাড</span>
                     </span>
                     <span
                       className={`text-[10px] font-semibold shrink-0 ${
-                        isCustomized ? "text-emerald-700" : "text-stone-400"
+                        isMyPadCustomized ? "text-emerald-700" : "text-stone-400"
                       }`}
                     >
-                      {isCustomized ? "আলাদা সেভ করা" : "ডিফল্ট"}
+                      {isMyPadCustomized ? "সংরক্ষিত" : "নতুন"}
                     </span>
                   </div>
-                  <p className="text-[11px] text-stone-500 mt-0.5 truncate tabular-nums">
-                    {isCustomized
-                      ? `স্বাক্ষরকারী: ${toBengaliDigits(
-                          savedPad.signatories?.length || 0
-                        )} জন`
-                      : "নিজস্ব তথ্য ও প্যাড সেট করুন"}
+                  <p className="text-[11px] text-stone-500 mt-0.5 truncate">
+                    {currentUserFullName || currentUserId}
                   </p>
                 </button>
               );
-            })}
+            })()}
+
+            {canEdit && (
+              <button
+                type="button"
+                onClick={() => setSelectedScope("__global__")}
+                className={`text-left px-3 py-2.5 rounded-lg border transition-colors cursor-pointer ${
+                  selectedScope === "__global__"
+                    ? "border-[#1E3A8A] bg-[#1E3A8A]/5 text-[#1E3A8A]"
+                    : "border-stone-200 bg-stone-50/50 text-stone-700 hover:bg-stone-50"
+                }`}
+              >
+                <p className="text-xs font-semibold truncate">
+                  মূল প্রতিষ্ঠানের তথ্য (ডিফল্ট)
+                </p>
+                <p className="text-[11px] text-stone-500 mt-0.5 truncate">
+                  {org.nameBn}
+                </p>
+              </button>
+            )}
+
+            {canEdit &&
+              departments.map((dept) => {
+                const savedPad = branchPadsMap[dept.name];
+                const isCustomized = Boolean(
+                  savedPad && savedPad.enabled !== false
+                );
+                const isSelected = selectedScope === dept.name;
+                return (
+                  <button
+                    key={dept.id}
+                    type="button"
+                    onClick={() => setSelectedScope(dept.name)}
+                    className={`text-left px-3 py-2.5 rounded-lg border transition-colors cursor-pointer ${
+                      isSelected
+                        ? "border-[#1E3A8A] bg-[#1E3A8A]/5 text-[#1E3A8A]"
+                        : "border-stone-200 bg-white text-stone-800 hover:bg-stone-50"
+                    }`}
+                  >
+                    <div className="flex items-center justify-between gap-1.5">
+                      <span className="text-xs font-semibold truncate">
+                        {dept.name}
+                      </span>
+                      <span
+                        className={`text-[10px] font-semibold shrink-0 ${
+                          isCustomized ? "text-emerald-700" : "text-stone-400"
+                        }`}
+                      >
+                        {isCustomized ? "আলাদা সেভ করা" : "ডিফল্ট"}
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-stone-500 mt-0.5 truncate tabular-nums">
+                      {isCustomized
+                        ? `স্বাক্ষরকারী: ${toBengaliDigits(
+                            savedPad.signatories?.length || 0
+                          )} জন`
+                        : "নিজস্ব তথ্য ও প্যাড সেট করুন"}
+                    </p>
+                  </button>
+                );
+              })}
           </div>
         </div>
       )}
 
       {!canEditSelectedScope && (
         <div className="mt-5 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-900">
-          {canEdit
-            ? "আপনি শুধুমাত্র আপনার নিজস্ব নির্ধারিত শাখার তথ্য ও প্যাড পরিবর্তন করতে পারবেন।"
-            : "প্রতিষ্ঠানের প্যাড ও লোগো পরিবর্তন করার অনুমতি বর্তমানে শুধুমাত্র অ্যাডমিনের জন্য সংরক্ষিত।"}
+          {allowSelfUserPad
+            ? "আপনি উপরে “আমার নিজস্ব প্যাড” নির্বাচন করে আপনার ব্যক্তিগত প্যাড ও স্বাক্ষর কাস্টমাইজ করতে পারবেন।"
+            : canEdit
+              ? "আপনি শুধুমাত্র আপনার নিজস্ব নির্ধারিত শাখার তথ্য ও প্যাড পরিবর্তন করতে পারবেন।"
+              : "প্রতিষ্ঠানের প্যাড ও লোগো পরিবর্তন করার অনুমতি বর্তমানে শুধুমাত্র অ্যাডমিনের জন্য সংরক্ষিত।"}
         </div>
       )}
 
@@ -810,7 +980,7 @@ export const OrganizationView: React.FC<OrganizationViewProps> = ({
             <div className="flex flex-wrap items-center justify-between gap-2 pb-3 border-b border-stone-200">
               <div>
                 <h2 className="text-sm font-bold text-stone-900">
-                  {selectedScope} — আলাদা প্রতিষ্ঠানের তথ্য ও প্যাড
+                  {scopeLabel} — আলাদা প্রতিষ্ঠানের তথ্য ও প্যাড
                 </h2>
                 <p className="text-[11px] text-stone-500 mt-0.5">
                   খালি রাখা ঘরগুলো স্বয়ংক্রিয়ভাবে মূল প্রতিষ্ঠানের তথ্য অনুসরণ করবে।
@@ -827,7 +997,11 @@ export const OrganizationView: React.FC<OrganizationViewProps> = ({
                   onChange={(e) => updateBranch("enabled", e.target.checked)}
                   className="w-4 h-4 accent-[#1E3A8A]"
                 />
-                <span>এই শাখার নিজস্ব প্যাড চালু</span>
+                <span>
+                  {isUserScope
+                    ? "আমার নিজস্ব প্যাড চালু"
+                    : "এই শাখার নিজস্ব প্যাড চালু"}
+                </span>
               </label>
             </div>
 
@@ -1208,7 +1382,7 @@ export const OrganizationView: React.FC<OrganizationViewProps> = ({
             <h2 className="text-sm font-semibold text-stone-900">
               {isGlobalScope
                 ? "লোগো, প্রতীক ও ব্র্যান্ড রঙ"
-                : `${selectedScope} — লোগো, প্রতীক ও রঙ`}
+                : `${scopeLabel} — লোগো, প্রতীক ও রঙ`}
             </h2>
 
             <div>
@@ -1343,7 +1517,7 @@ export const OrganizationView: React.FC<OrganizationViewProps> = ({
             <p className="text-xs font-medium text-stone-500 mb-3">
               {isGlobalScope
                 ? "প্যাডের শিরোনাম নমুনা"
-                : `${selectedScope} — প্যাডের শিরোনাম ও স্বাক্ষর নমুনা`}
+                : `${scopeLabel} — প্যাডের শিরোনাম ও স্বাক্ষর নমুনা`}
             </p>
             <div className="border border-stone-200 rounded-lg p-5 bg-white text-center font-letter-serif">
               <div className="flex justify-center mb-2">

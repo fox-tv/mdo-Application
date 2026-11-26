@@ -1017,6 +1017,10 @@ async function startServer() {
       if (accessPlg?.config?.userTemplateRules) {
         delete accessPlg.config.userTemplateRules[target.userId];
       }
+      const padPlg = db.plugins.find((p) => p.type === "branch-pad-designer");
+      if (padPlg?.config?.userPads) {
+        delete padPlg.config.userPads[target.userId];
+      }
       saveDb(db);
       res.json({ ok: true, plugins: db.plugins });
     }
@@ -1163,11 +1167,26 @@ async function startServer() {
     if (Array.isArray(payload.plugins) && payload.plugins.length > 0) {
       const restoredPlugins = payload.plugins.map((pl) => ({ ...pl }));
       for (const defPlugin of DEFAULT_PLUGINS) {
-        if (!restoredPlugins.some((p) => p.id === defPlugin.id || p.type === defPlugin.type)) {
+        const existingIdx = restoredPlugins.findIndex(
+          (p) => p.id === defPlugin.id || p.type === defPlugin.type
+        );
+        if (existingIdx < 0) {
           restoredPlugins.push({
             ...defPlugin,
             config: { ...defPlugin.config },
           });
+        } else if (defPlugin.type === "branch-pad-designer") {
+          const cur = restoredPlugins[existingIdx];
+          restoredPlugins[existingIdx] = {
+            ...cur,
+            config: {
+              ...(cur.config || {}),
+              branchPads: cur.config?.branchPads || {},
+              userPads: cur.config?.userPads || {},
+              allowUserSelfPadCustomize:
+                cur.config?.allowUserSelfPadCustomize !== false,
+            },
+          };
         }
       }
       db.plugins = restoredPlugins;
@@ -1434,10 +1453,10 @@ async function startServer() {
     }
   );
 
-  const sanitizeAndSaveBranchPad = (
-    deptName: string,
+  const sanitizePadConfig = (
+    labelFallback: string,
     rawBody: Partial<BranchPadConfig>
-  ): { plugins: SitePlugin[]; branchPad: BranchPadConfig } => {
+  ): BranchPadConfig => {
     const body = (rawBody || {}) as Partial<BranchPadConfig>;
     const validStyles: LetterheadStyle[] = ["classic", "modern", "archival"];
     const validFonts: LetterFont[] = ["sutonnymj", "serif", "sans"];
@@ -1483,9 +1502,9 @@ async function startServer() {
         ? rawLogo.slice(0, 500)
         : "";
 
-    const normalizedConfig: BranchPadConfig = {
+    return {
       enabled: body.enabled !== false,
-      branchTitleBn: String(body.branchTitleBn ?? deptName).trim().slice(0, 160),
+      branchTitleBn: String(body.branchTitleBn ?? labelFallback).trim().slice(0, 160),
       orgNameOverride: String(body.orgNameOverride || "").trim().slice(0, 200),
       nameEnOverride: String(body.nameEnOverride || "").trim().slice(0, 200),
       headerTagline: String(body.headerTagline || "").trim().slice(0, 240),
@@ -1509,20 +1528,52 @@ async function startServer() {
       footerNote: String(body.footerNote || "").trim().slice(0, 240),
       signatories: sanitizedSigs,
     };
+  };
 
-    const db = getDb();
+  const ensureBranchPadPlugin = (db: ReturnType<typeof getDb>): SitePlugin => {
     let padPlugin = db.plugins.find((p) => p.type === "branch-pad-designer");
     if (!padPlugin) {
       const def = DEFAULT_PLUGINS.find((p) => p.type === "branch-pad-designer")!;
-      padPlugin = { ...def, config: { ...def.config, branchPads: {} } };
+      padPlugin = {
+        ...def,
+        config: {
+          ...def.config,
+          branchPads: {},
+          userPads: {},
+          allowUserSelfPadCustomize: true,
+        },
+      };
       db.plugins.push(padPlugin);
     }
     if (!padPlugin.config) padPlugin.config = {};
     if (!padPlugin.config.branchPads) padPlugin.config.branchPads = {};
+    if (!padPlugin.config.userPads) padPlugin.config.userPads = {};
+    return padPlugin;
+  };
 
-    padPlugin.config.branchPads[deptName] = normalizedConfig;
+  const sanitizeAndSaveBranchPad = (
+    deptName: string,
+    rawBody: Partial<BranchPadConfig>
+  ): { plugins: SitePlugin[]; branchPad: BranchPadConfig } => {
+    const normalizedConfig = sanitizePadConfig(deptName, rawBody);
+    const db = getDb();
+    const padPlugin = ensureBranchPadPlugin(db);
+    padPlugin.config.branchPads![deptName] = normalizedConfig;
     saveDb(db);
     return { plugins: db.plugins, branchPad: normalizedConfig };
+  };
+
+  const sanitizeAndSaveUserPad = (
+    targetUserId: string,
+    fallbackLabel: string,
+    rawBody: Partial<BranchPadConfig>
+  ): { plugins: SitePlugin[]; userPad: BranchPadConfig } => {
+    const normalizedConfig = sanitizePadConfig(fallbackLabel, rawBody);
+    const db = getDb();
+    const padPlugin = ensureBranchPadPlugin(db);
+    padPlugin.config.userPads![targetUserId] = normalizedConfig;
+    saveDb(db);
+    return { plugins: db.plugins, userPad: normalizedConfig };
   };
 
   const canModifyBranchPad = (
@@ -1534,6 +1585,18 @@ async function startServer() {
     if (!db.siteConfig.allowUserOrgEdit) return false;
     if (!user.department || user.department === "সকল বিভাগ") return true;
     return user.department === deptName;
+  };
+
+  const canModifyUserPad = (
+    user: StoredUser,
+    targetUserId: string
+  ): boolean => {
+    if (user.role === "admin") return true;
+    if (user.userId !== targetUserId) return false;
+    const db = getDb();
+    const padPlugin = db.plugins.find((p) => p.type === "branch-pad-designer");
+    if (!padPlugin || !padPlugin.enabled) return false;
+    return padPlugin.config?.allowUserSelfPadCustomize !== false;
   };
 
   app.put(
@@ -1577,6 +1640,62 @@ async function startServer() {
   );
 
   app.put(
+    "/api/user-pads/:userId",
+    requireAuth,
+    (req: AuthenticatedRequest, res) => {
+      const targetUserId = decodeURIComponent(String(req.params.userId || "")).trim();
+      if (!targetUserId || targetUserId.length > 100) {
+        res.status(400).json({ error: "সঠিক ইউজার আইডি প্রদান করুন।" });
+        return;
+      }
+      if (!canModifyUserPad(req.currentUser!, targetUserId)) {
+        res.status(403).json({
+          error: "ইউজার ভিত্তিক প্যাড পরিবর্তনের অনুমতি বর্তমানে বন্ধ রয়েছে।",
+        });
+        return;
+      }
+      const db = getDb();
+      const targetUser = db.users.find((u) => u.userId === targetUserId);
+      if (!targetUser) {
+        res.status(404).json({ error: "ব্যবহারকারী খুঁজে পাওয়া যায়নি।" });
+        return;
+      }
+      const fallbackLabel =
+        targetUser.department && targetUser.department !== "সকল বিভাগ"
+          ? targetUser.department
+          : targetUser.fullName;
+      res.json(
+        sanitizeAndSaveUserPad(
+          targetUserId,
+          fallbackLabel,
+          (req.body || {}) as Partial<BranchPadConfig>
+        )
+      );
+    }
+  );
+
+  app.delete(
+    "/api/user-pads/:userId",
+    requireAuth,
+    (req: AuthenticatedRequest, res) => {
+      const targetUserId = decodeURIComponent(String(req.params.userId || "")).trim();
+      if (!targetUserId || !canModifyUserPad(req.currentUser!, targetUserId)) {
+        res.status(403).json({
+          error: "এই ইউজারের প্যাড রিসেট করার অনুমতি নেই।",
+        });
+        return;
+      }
+      const db = getDb();
+      const padPlugin = db.plugins.find((p) => p.type === "branch-pad-designer");
+      if (padPlugin?.config?.userPads && targetUserId) {
+        delete padPlugin.config.userPads[targetUserId];
+        saveDb(db);
+      }
+      res.json({ plugins: db.plugins });
+    }
+  );
+
+  app.put(
     "/api/admin/branch-pads/:department",
     requireAuth,
     requireAdmin,
@@ -1600,6 +1719,52 @@ async function startServer() {
       const padPlugin = db.plugins.find((p) => p.type === "branch-pad-designer");
       if (padPlugin?.config?.branchPads && deptName) {
         delete padPlugin.config.branchPads[deptName];
+        saveDb(db);
+      }
+      res.json({ plugins: db.plugins });
+    }
+  );
+
+  app.put(
+    "/api/admin/user-pads/:userId",
+    requireAuth,
+    requireAdmin,
+    (req, res) => {
+      const targetUserId = decodeURIComponent(String(req.params.userId || "")).trim();
+      if (!targetUserId || targetUserId.length > 100) {
+        res.status(400).json({ error: "সঠিক ইউজার আইডি প্রদান করুন।" });
+        return;
+      }
+      const db = getDb();
+      const targetUser = db.users.find((u) => u.userId === targetUserId);
+      if (!targetUser) {
+        res.status(404).json({ error: "ব্যবহারকারী খুঁজে পাওয়া যায়নি।" });
+        return;
+      }
+      const fallbackLabel =
+        targetUser.department && targetUser.department !== "সকল বিভাগ"
+          ? targetUser.department
+          : targetUser.fullName;
+      res.json(
+        sanitizeAndSaveUserPad(
+          targetUserId,
+          fallbackLabel,
+          (req.body || {}) as Partial<BranchPadConfig>
+        )
+      );
+    }
+  );
+
+  app.delete(
+    "/api/admin/user-pads/:userId",
+    requireAuth,
+    requireAdmin,
+    (req, res) => {
+      const targetUserId = decodeURIComponent(String(req.params.userId || "")).trim();
+      const db = getDb();
+      const padPlugin = db.plugins.find((p) => p.type === "branch-pad-designer");
+      if (padPlugin?.config?.userPads && targetUserId) {
+        delete padPlugin.config.userPads[targetUserId];
         saveDb(db);
       }
       res.json({ plugins: db.plugins });

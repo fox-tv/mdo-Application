@@ -2,12 +2,14 @@ import React, { useEffect, useMemo, useState } from "react";
 import {
   ArrowDown,
   ArrowUp,
+  Building2,
   Check,
   FileSignature,
   Plus,
   RotateCcw,
   Trash2,
   Upload,
+  User as UserIcon,
 } from "lucide-react";
 import type {
   BranchPadConfig,
@@ -18,6 +20,7 @@ import type {
   LetterFont,
   LetterheadStyle,
   OrganizationProfile,
+  PublicUser,
   SitePlugin,
 } from "../types";
 import { apiRequest } from "../utils/api";
@@ -27,7 +30,13 @@ import {
   generateNextRefNumber,
   toBengaliDigits,
 } from "../utils/bengali";
-import { createDefaultBranchPadConfig } from "../utils/branchPad";
+import {
+  createDefaultBranchPadConfig,
+  getBranchPadMap,
+  getUserPadMap,
+  isUserSelfPadCustomizeEnabled,
+  makeUserPadKey,
+} from "../utils/branchPad";
 import { CrestIcon } from "./CrestIcon";
 import { LetterPreview } from "./LetterPreview";
 
@@ -43,6 +52,7 @@ const CREST_OPTIONS: { id: CrestType; label: string }[] = [
 interface BranchPadDesignerPanelProps {
   org: OrganizationProfile;
   departments: DepartmentItem[];
+  users?: PublicUser[];
   plugins: SitePlugin[];
   onPluginsUpdated: (plugins: SitePlugin[]) => void;
   onTogglePlugin: (plugin: SitePlugin) => Promise<void>;
@@ -75,6 +85,7 @@ async function uploadImageFile(file: File): Promise<string> {
 export const BranchPadDesignerPanel: React.FC<BranchPadDesignerPanelProps> = ({
   org,
   departments,
+  users = [],
   plugins,
   onPluginsUpdated,
   onTogglePlugin,
@@ -83,10 +94,17 @@ export const BranchPadDesignerPanel: React.FC<BranchPadDesignerPanelProps> = ({
 }) => {
   const padPlugin = plugins.find((p) => p.type === "branch-pad-designer");
   const pluginEnabled = padPlugin ? padPlugin.enabled : true;
-  const branchPadsMap = padPlugin?.config?.branchPads || {};
+  const branchPadsMap = useMemo(() => getBranchPadMap(plugins), [plugins]);
+  const userPadsMap = useMemo(() => getUserPadMap(plugins), [plugins]);
+  const allowUserSelfPad = isUserSelfPadCustomizeEnabled(plugins);
 
+  const [targetMode, setTargetMode] = useState<"branch" | "user">("user");
   const [selectedDept, setSelectedDept] = useState<string>(
     departments[0]?.name || "হিসাবরক্ষক বিভাগ"
+  );
+  const [selectedUserId, setSelectedUserId] = useState<string>(
+    () =>
+      users.find((u) => u.role !== "admin")?.userId || users[0]?.userId || ""
   );
   const [draft, setDraft] = useState<BranchPadConfig>(() =>
     branchPadsMap[departments[0]?.name || "হিসাবরক্ষক বিভাগ"]
@@ -103,6 +121,7 @@ export const BranchPadDesignerPanel: React.FC<BranchPadDesignerPanelProps> = ({
         )
   );
   const [saving, setSaving] = useState(false);
+  const [togglingSelfPad, setTogglingSelfPad] = useState(false);
   const [uploadingLogo, setUploadingLogo] = useState(false);
   const [uploadingSigId, setUploadingSigId] = useState<string | null>(null);
 
@@ -114,6 +133,47 @@ export const BranchPadDesignerPanel: React.FC<BranchPadDesignerPanelProps> = ({
   }, [departments, selectedDept]);
 
   useEffect(() => {
+    if (users.length === 0) return;
+    if (!users.some((u) => u.userId === selectedUserId)) {
+      const preferred =
+        users.find((u) => u.role !== "admin")?.userId || users[0].userId;
+      setSelectedUserId(preferred);
+    }
+  }, [users, selectedUserId]);
+
+  const selectedUserObj = useMemo(
+    () => users.find((u) => u.userId === selectedUserId),
+    [users, selectedUserId]
+  );
+
+  useEffect(() => {
+    if (targetMode === "user") {
+      if (!selectedUserId) return;
+      const baseDefault = createDefaultBranchPadConfig(
+        selectedUserObj?.fullName || selectedUserId,
+        org,
+        {
+          isUserPad: true,
+          userFullName: selectedUserObj?.fullName,
+          userDesignation: selectedUserObj?.designation,
+          userDepartment: selectedUserObj?.department,
+        }
+      );
+      const saved = userPadsMap[selectedUserId];
+      if (saved) {
+        setDraft({
+          ...baseDefault,
+          ...saved,
+          signatories: Array.isArray(saved.signatories)
+            ? saved.signatories.map((s) => ({ ...s }))
+            : [],
+        });
+      } else {
+        setDraft(baseDefault);
+      }
+      return;
+    }
+
     if (!selectedDept) return;
     const saved = branchPadsMap[selectedDept];
     if (saved) {
@@ -127,9 +187,25 @@ export const BranchPadDesignerPanel: React.FC<BranchPadDesignerPanelProps> = ({
     } else {
       setDraft(createDefaultBranchPadConfig(selectedDept, org));
     }
-  }, [selectedDept, plugins]);
+  }, [
+    targetMode,
+    selectedDept,
+    selectedUserId,
+    selectedUserObj,
+    branchPadsMap,
+    userPadsMap,
+    org,
+  ]);
 
-  const isSavedCustomized = Boolean(branchPadsMap[selectedDept]);
+  const activeTargetLabel =
+    targetMode === "user"
+      ? selectedUserObj?.fullName || selectedUserId || "ইউজার"
+      : selectedDept;
+
+  const isSavedCustomized =
+    targetMode === "user"
+      ? Boolean(selectedUserId && userPadsMap[selectedUserId])
+      : Boolean(branchPadsMap[selectedDept]);
 
   const sampleLetter: LetterData = useMemo(() => {
     const now = new Date();
@@ -137,9 +213,13 @@ export const BranchPadDesignerPanel: React.FC<BranchPadDesignerPanelProps> = ({
       draft.signatories.length > 0
         ? draft.signatories[draft.signatories.length - 1]
         : undefined;
+    const padKey =
+      targetMode === "user" && selectedUserId
+        ? makeUserPadKey(selectedUserId)
+        : selectedDept;
     return {
       id: "preview-branch-pad",
-      templateType: selectedDept,
+      templateType: activeTargetLabel,
       refNumber: generateNextRefNumber(
         draft.refPrefix?.trim() || org.refPrefix,
         "নমুনা",
@@ -150,27 +230,95 @@ export const BranchPadDesignerPanel: React.FC<BranchPadDesignerPanelProps> = ({
       banglaDateText: formatBanglaCalendarDate(now),
       recipientPrefix: "বরাবর",
       recipientName: "সংশ্লিষ্ট কর্মকর্তা / কর্তৃপক্ষ",
-      recipientTitle: selectedDept,
+      recipientTitle: activeTargetLabel,
       recipientOrg: draft.orgNameOverride?.trim() || org.nameBn,
       recipientAddress: draft.address?.trim() || org.address,
-      subject: `${draft.branchTitleBn || selectedDept} এর দাপ্তরিক প্যাড ও স্বাক্ষর নমুনা প্রসঙ্গে।`,
+      subject: `${draft.branchTitleBn || activeTargetLabel} এর দাপ্তরিক প্যাড ও স্বাক্ষর নমুনা প্রসঙ্গে।`,
       salutation: "মহোদয়,",
-      body: `সাদর সম্ভাষণ। এটি “${draft.branchTitleBn || selectedDept}”-এর জন্য নির্ধারিত স্বতন্ত্র দাপ্তরিক প্যাডের সরাসরি প্রিভিউ।\n\nএই শাখা প্যাডে প্রতিষ্ঠানের হেডার, রঙ, স্মারক উপসর্গ এবং নিচের অংশে নির্ধারিত সকল স্বাক্ষরকারীর পদবি ও স্বাক্ষর একত্রে প্রদর্শিত হচ্ছে।`,
+      body: `সাদর সম্ভাষণ। এটি “${draft.branchTitleBn || activeTargetLabel}”-এর জন্য নির্ধারিত স্বতন্ত্র দাপ্তরিক প্যাডের সরাসরি প্রিভিউ।\n\nএই প্যাডে প্রতিষ্ঠানের হেডার, রঙ, স্মারক উপসর্গ এবং নিচের অংশে নির্ধারিত সকল স্বাক্ষরকারীর পদবি ও স্বাক্ষর একত্রে প্রদর্শিত হচ্ছে।`,
       closing: "বিনীত,",
-      signatoryName: lastSig?.name || org.defaultSignatoryName,
-      signatoryTitle: lastSig?.title || org.defaultSignatoryTitle,
-      signatoryDept: lastSig?.department || draft.branchTitleBn || selectedDept,
+      signatoryName:
+        lastSig?.name ||
+        (targetMode === "user" ? selectedUserObj?.fullName : "") ||
+        org.defaultSignatoryName,
+      signatoryTitle:
+        lastSig?.title ||
+        (targetMode === "user" ? selectedUserObj?.designation : "") ||
+        org.defaultSignatoryTitle,
+      signatoryDept:
+        lastSig?.department || draft.branchTitleBn || activeTargetLabel,
       attachments: "",
       ccList: "",
       letterheadStyle: draft.letterheadStyle || "classic",
       letterFont: draft.letterFont || "sutonnymj",
       showWatermark: true,
       showSealPlaceholder: true,
-      branchPadDepartment: selectedDept,
+      branchPadDepartment: padKey,
     };
-  }, [draft, org, selectedDept]);
+  }, [
+    draft,
+    org,
+    selectedDept,
+    selectedUserId,
+    selectedUserObj,
+    targetMode,
+    activeTargetLabel,
+  ]);
 
-  const handleSaveBranchPad = async () => {
+  const handleToggleUserSelfPad = async () => {
+    if (!padPlugin) return;
+    setTogglingSelfPad(true);
+    try {
+      const nextAllow = !allowUserSelfPad;
+      const res = await apiRequest<{ plugins: SitePlugin[] }>(
+        `/api/admin/plugins/${padPlugin.id}`,
+        {
+          method: "PUT",
+          body: JSON.stringify({
+            config: {
+              ...(padPlugin.config || {}),
+              allowUserSelfPadCustomize: nextAllow,
+            },
+          }),
+        }
+      );
+      onPluginsUpdated(res.plugins);
+      onShowSuccess(
+        nextAllow
+          ? "ইউজারের নিজস্ব প্যাড কাস্টমাইজেশন চালু করা হয়েছে।"
+          : "ইউজারের নিজস্ব প্যাড কাস্টমাইজেশন বন্ধ করা হয়েছে।"
+      );
+    } catch (err) {
+      onShowError(err);
+    } finally {
+      setTogglingSelfPad(false);
+    }
+  };
+
+  const handleSavePad = async () => {
+    if (targetMode === "user") {
+      if (!selectedUserId) return;
+      setSaving(true);
+      try {
+        const res = await apiRequest<{ plugins: SitePlugin[] }>(
+          `/api/admin/user-pads/${encodeURIComponent(selectedUserId)}`,
+          {
+            method: "PUT",
+            body: JSON.stringify(draft),
+          }
+        );
+        onPluginsUpdated(res.plugins);
+        onShowSuccess(
+          `“${activeTargetLabel}” ইউজারের ব্যক্তিগত প্যাড ও স্বাক্ষরকারী নকশা সফলভাবে সংরক্ষণ করা হয়েছে।`
+        );
+      } catch (err) {
+        onShowError(err);
+      } finally {
+        setSaving(false);
+      }
+      return;
+    }
+
     if (!selectedDept) return;
     setSaving(true);
     try {
@@ -192,7 +340,39 @@ export const BranchPadDesignerPanel: React.FC<BranchPadDesignerPanelProps> = ({
     }
   };
 
-  const handleResetBranchPad = async () => {
+  const handleResetPad = async () => {
+    if (targetMode === "user") {
+      if (!selectedUserId) return;
+      setSaving(true);
+      try {
+        const res = await apiRequest<{ plugins: SitePlugin[] }>(
+          `/api/admin/user-pads/${encodeURIComponent(selectedUserId)}`,
+          { method: "DELETE" }
+        );
+        onPluginsUpdated(res.plugins);
+        setDraft(
+          createDefaultBranchPadConfig(
+            selectedUserObj?.fullName || selectedUserId,
+            org,
+            {
+              isUserPad: true,
+              userFullName: selectedUserObj?.fullName,
+              userDesignation: selectedUserObj?.designation,
+              userDepartment: selectedUserObj?.department,
+            }
+          )
+        );
+        onShowSuccess(
+          `“${activeTargetLabel}” ইউজার এখন শাখা বা মূল প্রাতিষ্ঠানিক প্যাড অনুসরণ করবে।`
+        );
+      } catch (err) {
+        onShowError(err);
+      } finally {
+        setSaving(false);
+      }
+      return;
+    }
+
     if (!selectedDept) return;
     setSaving(true);
     try {
@@ -252,12 +432,16 @@ export const BranchPadDesignerPanel: React.FC<BranchPadDesignerPanelProps> = ({
 
   const addSignatory = () => {
     if (draft.signatories.length >= 6) return;
+    const defaultDept =
+      targetMode === "user"
+        ? selectedUserObj?.department || org.defaultSignatoryDept
+        : selectedDept;
     const nextItem: BranchPadSignatory = {
       id: `sig-${Date.now()}-${draft.signatories.length + 1}`,
       roleLabel: "স্বাক্ষরকারী",
       name: "",
       title: "",
-      department: selectedDept,
+      department: defaultDept,
       signatureUrl: "",
     };
     setDraft((prev) => ({
@@ -369,111 +553,216 @@ export const BranchPadDesignerPanel: React.FC<BranchPadDesignerPanelProps> = ({
 
   return (
     <div className="mt-6 space-y-6">
-      {/* Plugin Status Header */}
-      <div className="bg-white border border-stone-200 rounded-xl p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div>
-          <div className="flex items-center gap-2">
-            <FileSignature className="w-4 h-4 text-[#1E3A8A]" />
-            <h2 className="text-sm font-semibold text-stone-900">
-              শাখাভিত্তিক প্যাড ও স্বাক্ষরকারী ডিজাইন প্লাগইন
-            </h2>
-            <span
-              className={`text-xs font-semibold ${
-                pluginEnabled ? "text-emerald-700" : "text-stone-500"
+      {/* Plugin Status Header & Self-Customization Controls */}
+      <div className="bg-white border border-stone-200 rounded-xl p-5 space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div>
+            <div className="flex items-center gap-2">
+              <FileSignature className="w-4 h-4 text-[#1E3A8A]" />
+              <h2 className="text-sm font-semibold text-stone-900">
+                শাখা ও ইউজার ভিত্তিক প্যাড কাস্টমাইজেশন প্লাগইন
+              </h2>
+              <span
+                className={`text-xs font-semibold ${
+                  pluginEnabled ? "text-emerald-700" : "text-stone-500"
+                }`}
+              >
+                · {pluginEnabled ? "সক্রিয়" : "নিষ্ক্রিয়"}
+              </span>
+            </div>
+            <p className="mt-1 text-xs text-stone-600 leading-relaxed max-w-3xl">
+              প্রত্যেকটি ইউজার ও শাখার জন্য আলাদা হেডার প্যাড, রঙ, লোগো, স্মারক উপসর্গ এবং প্যাডের নিচে একাধিক স্বাক্ষরকারীর সারি ডিজাইন করুন। নিচের বিকল্প চালু থাকলে প্রতিটি ইউজার নিজস্ব ড্যাশবোর্ড/প্যাড সেটিংস থেকেও নিজের প্যাড কাস্টমাইজ করতে পারবেন।
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2 shrink-0">
+            {padPlugin && (
+              <button
+                type="button"
+                onClick={() => void onTogglePlugin(padPlugin)}
+                className={`h-10 px-4 rounded-lg border text-xs font-semibold cursor-pointer ${
+                  pluginEnabled
+                    ? "border-emerald-200 bg-emerald-50 text-emerald-800 hover:bg-emerald-100"
+                    : "border-stone-300 bg-stone-50 text-stone-700 hover:bg-stone-100"
+                }`}
+              >
+                {pluginEnabled
+                  ? "প্লাগইন চালু আছে (নিষ্ক্রিয় করুন)"
+                  : "প্লাগইন চালু করুন"}
+              </button>
+            )}
+          </div>
+        </div>
+
+        <div className="pt-3 border-t border-stone-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="inline-flex rounded-lg border border-stone-200 bg-stone-100 p-1 self-start">
+            <button
+              type="button"
+              onClick={() => setTargetMode("user")}
+              className={`inline-flex items-center gap-1.5 px-3.5 py-2 rounded-md text-xs font-semibold transition-colors cursor-pointer ${
+                targetMode === "user"
+                  ? "bg-white text-[#1E3A8A] shadow-xs"
+                  : "text-stone-600 hover:text-stone-900"
               }`}
             >
-              · {pluginEnabled ? "সক্রিয়" : "নিষ্ক্রিয়"}
-            </span>
+              <UserIcon className="w-3.5 h-3.5" />
+              <span>ইউজার ভিত্তিক প্যাড ({toBengaliDigits(users.length)})</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setTargetMode("branch")}
+              className={`inline-flex items-center gap-1.5 px-3.5 py-2 rounded-md text-xs font-semibold transition-colors cursor-pointer ${
+                targetMode === "branch"
+                  ? "bg-white text-[#1E3A8A] shadow-xs"
+                  : "text-stone-600 hover:text-stone-900"
+              }`}
+            >
+              <Building2 className="w-3.5 h-3.5" />
+              <span>শাখা ভিত্তিক প্যাড ({toBengaliDigits(departments.length)})</span>
+            </button>
           </div>
-          <p className="mt-1 text-xs text-stone-600 leading-relaxed max-w-3xl">
-            প্রত্যেকটি শাখা ও বিভাগের জন্য আলাদা হেডার প্যাড, রঙ, লোগো, স্মারক উপসর্গ এবং প্যাডের নিচে একাধিক স্বাক্ষরকারীর (যেমন প্রস্তুতকারী, যাচাইকারী ও অনুমোদনকারী) সারি ডিজাইন করুন। সংশ্লিষ্ট শাখার ইউজার চিঠি লিখলে স্বয়ংক্রিয়ভাবে সেই শাখার প্যাড ও স্বাক্ষরকারী যুক্ত হবে।
-          </p>
+
+          {padPlugin && (
+            <label
+              htmlFor="toggle-user-self-pad"
+              className="inline-flex items-center gap-2 text-xs font-medium text-stone-800 cursor-pointer"
+            >
+              <input
+                id="toggle-user-self-pad"
+                type="checkbox"
+                checked={allowUserSelfPad}
+                disabled={togglingSelfPad}
+                onChange={() => void handleToggleUserSelfPad()}
+                className="w-4 h-4 accent-[#1E3A8A]"
+              />
+              <span>ইউজারের নিজস্ব প্যাড কাস্টমাইজেশন অনুমতি চালু</span>
+            </label>
+          )}
         </div>
-        {padPlugin && (
-          <button
-            type="button"
-            onClick={() => void onTogglePlugin(padPlugin)}
-            className={`h-10 px-4 rounded-lg border text-xs font-semibold shrink-0 cursor-pointer ${
-              pluginEnabled
-                ? "border-emerald-200 bg-emerald-50 text-emerald-800 hover:bg-emerald-100"
-                : "border-stone-300 bg-stone-50 text-stone-700 hover:bg-stone-100"
-            }`}
-          >
-            {pluginEnabled ? "প্লাগইন চালু আছে (নিষ্ক্রিয় করুন)" : "প্লাগইন চালু করুন"}
-          </button>
-        )}
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-        {/* Left: Branch/Department Selector */}
+        {/* Left: User or Branch Selector */}
         <div className="lg:col-span-4 bg-white border border-stone-200 rounded-xl overflow-hidden">
           <div className="px-4 py-3.5 border-b border-stone-200 flex items-center justify-between">
             <h3 className="text-xs font-semibold text-stone-900">
-              শাখা / বিভাগ নির্বাচন করুন
+              {targetMode === "user"
+                ? "ইউজার নির্বাচন করুন"
+                : "শাখা / বিভাগ নির্বাচন করুন"}
             </h3>
             <span className="text-xs text-stone-500 tabular-nums">
-              {toBengaliDigits(departments.length)}টি
+              {targetMode === "user"
+                ? `${toBengaliDigits(users.length)} জন`
+                : `${toBengaliDigits(departments.length)}টি`}
             </span>
           </div>
-          <div className="divide-y divide-stone-200">
-            {departments.map((dept) => {
-              const cfg = branchPadsMap[dept.name];
-              const isSelected = selectedDept === dept.name;
-              const sigCount = cfg?.signatories?.length || 0;
-              return (
-                <button
-                  key={dept.id}
-                  type="button"
-                  onClick={() => setSelectedDept(dept.name)}
-                  className={`w-full text-left px-4 py-3 transition-colors cursor-pointer ${
-                    isSelected
-                      ? "bg-[#1E3A8A]/5 border-l-4 border-[#1E3A8A]"
-                      : "hover:bg-stone-50"
-                  }`}
-                >
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="text-sm font-semibold text-stone-900 truncate">
-                      {dept.name}
-                    </span>
-                    {cfg && cfg.enabled !== false ? (
-                      <span className="text-[11px] font-semibold text-emerald-700 shrink-0">
-                        কাস্টম প্যাড
+          <div className="divide-y divide-stone-200 max-h-[540px] overflow-y-auto">
+            {targetMode === "user" ? (
+              users.length === 0 ? (
+                <div className="p-6 text-center text-xs text-stone-500">
+                  কোনো ইউজার পাওয়া যায়নি।
+                </div>
+              ) : (
+                users.map((u) => {
+                  const cfg = userPadsMap[u.userId];
+                  const isSelected = selectedUserId === u.userId;
+                  const sigCount = cfg?.signatories?.length || 0;
+                  return (
+                    <button
+                      key={u.id}
+                      type="button"
+                      onClick={() => setSelectedUserId(u.userId)}
+                      className={`w-full text-left px-4 py-3 transition-colors cursor-pointer ${
+                        isSelected
+                          ? "bg-[#1E3A8A]/5 border-l-4 border-[#1E3A8A]"
+                          : "hover:bg-stone-50"
+                      }`}
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-sm font-semibold text-stone-900 truncate">
+                          {u.fullName}
+                        </span>
+                        {cfg && cfg.enabled !== false ? (
+                          <span className="text-[11px] font-semibold text-emerald-700 shrink-0">
+                            কাস্টম প্যাড
+                          </span>
+                        ) : (
+                          <span className="text-[11px] text-stone-400 shrink-0">
+                            ডিফল্ট
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-[11px] text-stone-500 mt-0.5 truncate tabular-nums">
+                        আইডি: {u.userId} · {u.department || "সকল বিভাগ"}
+                        {cfg ? ` · স্বাক্ষরকারী: ${toBengaliDigits(sigCount)} জন` : ""}
+                      </p>
+                    </button>
+                  );
+                })
+              )
+            ) : (
+              departments.map((dept) => {
+                const cfg = branchPadsMap[dept.name];
+                const isSelected = selectedDept === dept.name;
+                const sigCount = cfg?.signatories?.length || 0;
+                return (
+                  <button
+                    key={dept.id}
+                    type="button"
+                    onClick={() => setSelectedDept(dept.name)}
+                    className={`w-full text-left px-4 py-3 transition-colors cursor-pointer ${
+                      isSelected
+                        ? "bg-[#1E3A8A]/5 border-l-4 border-[#1E3A8A]"
+                        : "hover:bg-stone-50"
+                    }`}
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-sm font-semibold text-stone-900 truncate">
+                        {dept.name}
                       </span>
-                    ) : (
-                      <span className="text-[11px] text-stone-400 shrink-0">
-                        ডিফল্ট
-                      </span>
-                    )}
-                  </div>
-                  <p className="text-[11px] text-stone-500 mt-0.5 tabular-nums">
-                    {cfg
-                      ? `স্বাক্ষরকারী: ${toBengaliDigits(sigCount)} জন · শৈলী: ${
-                          cfg.letterheadStyle === "modern"
-                            ? "আধুনিক"
-                            : cfg.letterheadStyle === "archival"
-                              ? "ঐতিহ্যবাহী"
-                              : "ক্লাসিক"
-                        }`
-                      : "প্রতিষ্ঠানের মূল প্যাড প্রযোজ্য"}
-                  </p>
-                </button>
-              );
-            })}
+                      {cfg && cfg.enabled !== false ? (
+                        <span className="text-[11px] font-semibold text-emerald-700 shrink-0">
+                          কাস্টম প্যাড
+                        </span>
+                      ) : (
+                        <span className="text-[11px] text-stone-400 shrink-0">
+                          ডিফল্ট
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-[11px] text-stone-500 mt-0.5 tabular-nums">
+                      {cfg
+                        ? `স্বাক্ষরকারী: ${toBengaliDigits(sigCount)} জন · শৈলী: ${
+                            cfg.letterheadStyle === "modern"
+                              ? "আধুনিক"
+                              : cfg.letterheadStyle === "archival"
+                                ? "ঐতিহ্যবাহী"
+                                : "ক্লাসিক"
+                          }`
+                        : "প্রতিষ্ঠানের মূল প্যাড প্রযোজ্য"}
+                    </p>
+                  </button>
+                );
+              })
+            )}
           </div>
         </div>
 
-        {/* Right: Branch Pad Designer & Live Preview */}
+        {/* Right: Pad Designer & Live Preview */}
         <div className="lg:col-span-8 space-y-6">
           <div className="bg-white border border-stone-200 rounded-xl p-6 space-y-5">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-stone-200">
               <div>
                 <h3 className="text-base font-bold text-stone-900">
-                  {selectedDept} — প্যাড ডিজাইনার
+                  {activeTargetLabel} — প্যাড ডিজাইনার
                 </h3>
                 <p className="text-xs text-stone-500 mt-0.5">
-                  {isSavedCustomized
-                    ? "এই শাখার কাস্টম প্যাড ও নিচের স্বাক্ষরকারী সংরক্ষিত রয়েছে।"
-                    : "এখন খসড়া তৈরি করে সংরক্ষণ করলেই এই শাখার নিজস্ব প্যাড চালু হবে।"}
+                  {targetMode === "user"
+                    ? isSavedCustomized
+                      ? "এই ইউজারের ব্যক্তিগত কাস্টম প্যাড সংরক্ষিত রয়েছে (শাখা/মূল প্যাডের চেয়ে অগ্রাধিকার পাবে)।"
+                      : "এই ইউজারের জন্য আলাদা প্যাড সংরক্ষণ করলে তার প্রতিটি চিঠিতে এটি স্বয়ংক্রিয়ভাবে প্রযোজ্য হবে।"
+                    : isSavedCustomized
+                      ? "এই শাখার কাস্টম প্যাড ও নিচের স্বাক্ষরকারী সংরক্ষিত রয়েছে।"
+                      : "এখন খসড়া তৈরি করে সংরক্ষণ করলেই এই শাখার নিজস্ব প্যাড চালু হবে।"}
                 </p>
               </div>
               <label
@@ -489,7 +778,11 @@ export const BranchPadDesignerPanel: React.FC<BranchPadDesignerPanelProps> = ({
                   }
                   className="w-4 h-4 accent-[#1E3A8A]"
                 />
-                <span>এই শাখার কাস্টম প্যাড চালু</span>
+                <span>
+                  {targetMode === "user"
+                    ? "এই ইউজারের কাস্টম প্যাড চালু"
+                    : "এই শাখার কাস্টম প্যাড চালু"}
+                </span>
               </label>
             </div>
 
@@ -1040,7 +1333,7 @@ export const BranchPadDesignerPanel: React.FC<BranchPadDesignerPanelProps> = ({
             <div className="pt-4 border-t border-stone-200 flex flex-wrap items-center justify-between gap-3">
               <button
                 type="button"
-                onClick={() => void handleResetBranchPad()}
+                onClick={() => void handleResetPad()}
                 disabled={saving || !isSavedCustomized}
                 className="inline-flex items-center gap-1.5 h-10 px-4 rounded-lg border border-stone-300 bg-white text-xs font-medium text-stone-700 hover:bg-stone-50 disabled:opacity-50 cursor-pointer"
               >
@@ -1050,23 +1343,27 @@ export const BranchPadDesignerPanel: React.FC<BranchPadDesignerPanelProps> = ({
 
               <button
                 type="button"
-                onClick={() => void handleSaveBranchPad()}
-                disabled={saving}
+                onClick={() => void handleSavePad()}
+                disabled={saving || (targetMode === "user" && !selectedUserId)}
                 className="inline-flex items-center gap-1.5 h-10 px-5 rounded-lg bg-[#1E3A8A] text-xs font-semibold text-white hover:bg-[#172D6B] disabled:opacity-60 cursor-pointer"
               >
                 <Check className="w-4 h-4" />
                 <span>
-                  {saving ? "সংরক্ষণ হচ্ছে..." : "শাখা প্যাড ও স্বাক্ষরকারী সংরক্ষণ করুন"}
+                  {saving
+                    ? "সংরক্ষণ হচ্ছে..."
+                    : targetMode === "user"
+                      ? "ইউজারের প্যাড ও স্বাক্ষরকারী সংরক্ষণ করুন"
+                      : "শাখা প্যাড ও স্বাক্ষরকারী সংরক্ষণ করুন"}
                 </span>
               </button>
             </div>
           </div>
 
-          {/* Live A4 Branch Pad Preview */}
+          {/* Live A4 Pad Preview */}
           <div className="bg-white border border-stone-200 rounded-xl p-5 space-y-3">
             <div className="flex items-center justify-between">
               <h4 className="text-xs font-semibold text-stone-900">
-                লাইভ শাখা প্যাড প্রিভিউ ({selectedDept})
+                লাইভ প্যাড প্রিভিউ ({activeTargetLabel})
               </h4>
               <span className="text-[11px] text-stone-500">
                 নমুনা এ-৪ প্রদর্শন

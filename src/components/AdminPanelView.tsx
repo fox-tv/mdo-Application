@@ -89,6 +89,7 @@ interface AdminPanelViewProps {
   }) => void;
   onOpenOrgTab?: () => void;
   onNavigateTab?: (tab: AppTab) => void;
+  onTabChange?: (tab: AdminTab) => void;
   onOpenLetter: (letter: SavedLetter) => void;
   onDeleteLetter: (id: string) => Promise<void>;
 }
@@ -152,10 +153,16 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
   onFullRestore,
   onOpenOrgTab,
   onNavigateTab,
+  onTabChange,
   onOpenLetter,
   onDeleteLetter,
 }) => {
   const [tab, setTab] = useState<AdminTab>(initialTab);
+  const selectAdminTab = (nextTab: AdminTab) => {
+    setTab(nextTab);
+    setErrorMsg("");
+    onTabChange?.(nextTab);
+  };
   const [feedback, setFeedback] = useState("");
   const [errorMsg, setErrorMsg] = useState("");
   const [connectingCloud, setConnectingCloud] = useState(false);
@@ -715,20 +722,20 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
       if (onNavigateTab) {
         onNavigateTab("templates");
       } else {
-        setTab("templates");
+        selectAdminTab("templates");
       }
     } else if (type === "template-access") {
-      setTab("template-access");
+      selectAdminTab("template-access");
     } else if (type === "branch-pad-designer") {
-      setTab("branch-pads");
+      selectAdminTab("branch-pads");
     } else if (type === "ai-assistant") {
-      setTab("ai-assistant");
+      selectAdminTab("ai-assistant");
     } else if (type === "site-customizer") {
-      setTab("site");
+      selectAdminTab("site");
     } else if (type === "department-manager") {
-      setTab("departments");
+      selectAdminTab("departments");
     } else if (type === "backup-manager") {
-      setTab("developer");
+      selectAdminTab("developer");
     }
   };
 
@@ -832,7 +839,7 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
     { id: "ai-assistant", label: "এআই অ্যাসিস্ট্যান্ট" },
     { id: "site", label: "সাইট ও থিম কাস্টমাইজ" },
     { id: "plugins", label: "প্লাগইন স্টুডিও" },
-    { id: "branch-pads", label: "শাখা প্যাড ও স্বাক্ষরকারী" },
+    { id: "branch-pads", label: "শাখা ও ইউজার প্যাড" },
     { id: "template-access", label: "টেমপ্লেট অনুমতি" },
     { id: "users", label: "ইউজার ও পাসওয়ার্ড" },
     { id: "templates", label: "টেমপ্লেট কাস্টমাইজ" },
@@ -868,8 +875,7 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
             key={item.id}
             type="button"
             onClick={() => {
-              setTab(item.id);
-              setErrorMsg("");
+              selectAdminTab(item.id);
             }}
             className={`px-4 py-2 rounded-lg text-xs font-medium transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
               tab === item.id
@@ -1119,7 +1125,7 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
                           type="button"
                           onClick={() => {
                             setSelectedAccessUserId(u.userId);
-                            setTab("template-access");
+                            selectAdminTab("template-access");
                           }}
                           className="inline-flex items-center gap-1 h-9 px-3 rounded-lg border border-[#1E3A8A]/30 bg-[#1E3A8A]/5 text-xs font-medium text-[#1E3A8A] hover:bg-[#1E3A8A]/10 cursor-pointer"
                         >
@@ -1173,7 +1179,7 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
           pluginEnabled={
             plugins.find((p) => p.type === "ai-assistant")?.enabled !== false
           }
-          onOpenPluginStudio={() => setTab("plugins")}
+          onOpenPluginStudio={() => selectAdminTab("plugins")}
           onConfigUpdated={onWorkspaceMutated}
           onSyncWorkspace={(sync: AssistantSyncPayload) => {
             setSiteForm(sync.siteConfig);
@@ -1349,7 +1355,7 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
                     </div>
                     <button
                       type="button"
-                      onClick={() => setTab("users")}
+                      onClick={() => selectAdminTab("users")}
                       className="inline-flex items-center gap-1.5 h-10 px-4 rounded-lg bg-[#1E3A8A] text-xs font-semibold text-white hover:bg-[#172D6B] cursor-pointer"
                     >
                       <UserPlus className="w-4 h-4" />
@@ -1567,11 +1573,12 @@ export const AdminPanelView: React.FC<AdminPanelViewProps> = ({
         );
       })()}
 
-      {/* TAB: BRANCH PAD & SIGNATORIES DESIGNER PLUGIN */}
+      {/* TAB: BRANCH & USER PAD DESIGNER PLUGIN */}
       {tab === "branch-pads" && (
         <BranchPadDesignerPanel
           org={org}
           departments={departments}
+          users={users}
           plugins={plugins}
           onPluginsUpdated={onPluginsUpdated}
           onTogglePlugin={handleTogglePlugin}

@@ -38,7 +38,11 @@ import {
 } from "../utils/bengali";
 import {
   getBranchPadMap,
+  getUserPadMap,
   isBranchPadPluginEnabled,
+  isUserSelfPadCustomizeEnabled,
+  makeUserPadKey,
+  parseUserPadKey,
   resolveBranchPadForLetter,
 } from "../utils/branchPad";
 import {
@@ -57,6 +61,7 @@ interface EditorViewProps {
   quickPhrases: QuickPhrase[];
   plugins?: SitePlugin[];
   userDepartment?: string;
+  currentUserId?: string;
   pluginSnippets?: { id: string; name: string; text: string }[];
   allowAiDrafting: boolean;
   isSavedOnServer?: boolean;
@@ -68,6 +73,7 @@ interface EditorViewProps {
   ) => Promise<void> | void;
   onDraftSynced?: () => void;
   onApplyTemplate: (templateId: string) => void;
+  onOpenPadCustomizer?: () => void;
 }
 
 type AutoSaveStatus = "idle" | "pending" | "saving" | "saved" | "error";
@@ -144,6 +150,7 @@ export const EditorView: React.FC<EditorViewProps> = ({
   quickPhrases,
   plugins = [],
   userDepartment,
+  currentUserId,
   pluginSnippets = [],
   allowAiDrafting,
   isSavedOnServer = false,
@@ -152,6 +159,7 @@ export const EditorView: React.FC<EditorViewProps> = ({
   onSaveLetter,
   onDraftSynced,
   onApplyTemplate,
+  onOpenPadCustomizer,
 }) => {
   const [subTab, setSubTab] = useState<EditorSubTab>("content");
   const [aiPrompt, setAiPrompt] = useState("");
@@ -649,15 +657,21 @@ export const EditorView: React.FC<EditorViewProps> = ({
     (t) => !departmentNames.includes(t.category)
   );
   const branchPadEnabled = isBranchPadPluginEnabled(plugins);
+  const allowSelfUserPad = isUserSelfPadCustomizeEnabled(plugins);
   const branchPadMap = getBranchPadMap(plugins);
+  const userPadMap = getUserPadMap(plugins);
   const configuredBranchPadNames = Object.keys(branchPadMap).filter(
     (dept) => branchPadMap[dept]?.enabled !== false
+  );
+  const configuredUserPadIds = Object.keys(userPadMap).filter(
+    (uid) => userPadMap[uid]?.enabled !== false
   );
   const activeBranchPad = resolveBranchPadForLetter({
     plugins,
     letter,
     templates,
     userDepartment,
+    currentUserId,
   });
 
   return (
@@ -1250,66 +1264,115 @@ export const EditorView: React.FC<EditorViewProps> = ({
 
             {subTab === "design" && (
               <>
-                {branchPadEnabled && configuredBranchPadNames.length > 0 && (
-                  <div className="p-3.5 rounded-lg border border-[#1E3A8A]/20 bg-[#1E3A8A]/5 space-y-2">
-                    <label
-                      htmlFor="editor-branch-pad-select"
-                      className="block text-xs font-semibold text-stone-900"
-                    >
-                      শাখাভিত্তিক প্যাড ও নিচের স্বাক্ষরকারী নির্বাচন
-                    </label>
-                    <select
-                      id="editor-branch-pad-select"
-                      name="branchPadDepartment"
-                      value={letter.branchPadDepartment || ""}
-                      onChange={(e) => {
-                        const val = e.target.value;
-                        const chosen =
-                          val && val !== "__default__" ? branchPadMap[val] : undefined;
-                        onChange({
-                          ...letter,
-                          branchPadDepartment: val || undefined,
-                          ...(chosen?.letterheadStyle
-                            ? { letterheadStyle: chosen.letterheadStyle }
-                            : {}),
-                          ...(chosen?.letterFont
-                            ? { letterFont: chosen.letterFont }
-                            : {}),
-                        });
-                      }}
-                      className="w-full h-10 rounded-lg border border-stone-300 bg-white px-3 text-xs font-medium text-stone-900 focus:outline-none focus:border-[#1E3A8A]"
-                    >
-                      <option value="">
-                        স্বয়ংক্রিয় (টেমপ্লেট বা ব্যবহারকারীর শাখা অনুযায়ী)
-                      </option>
-                      {configuredBranchPadNames.map((deptName) => {
-                        const sigCount =
-                          branchPadMap[deptName]?.signatories?.length || 0;
-                        return (
-                          <option key={deptName} value={deptName}>
-                            {deptName} ({toBengaliDigits(sigCount)} জন স্বাক্ষরকারী)
+                {branchPadEnabled &&
+                  (configuredBranchPadNames.length > 0 ||
+                    configuredUserPadIds.length > 0 ||
+                    (allowSelfUserPad && onOpenPadCustomizer)) && (
+                    <div className="p-3.5 rounded-lg border border-[#1E3A8A]/20 bg-[#1E3A8A]/5 space-y-2.5">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <label
+                          htmlFor="editor-branch-pad-select"
+                          className="block text-xs font-semibold text-stone-900"
+                        >
+                          ইউজার / শাখাভিত্তিক প্যাড ও স্বাক্ষরকারী নির্বাচন
+                        </label>
+                        {allowSelfUserPad && onOpenPadCustomizer && (
+                          <button
+                            type="button"
+                            onClick={onOpenPadCustomizer}
+                            className="text-[11px] font-semibold text-[#1E3A8A] hover:underline cursor-pointer"
+                          >
+                            নিজস্ব প্যাড কাস্টমাইজ করুন
+                          </button>
+                        )}
+                      </div>
+                      {(configuredBranchPadNames.length > 0 ||
+                        configuredUserPadIds.length > 0) && (
+                        <select
+                          id="editor-branch-pad-select"
+                          name="branchPadDepartment"
+                          value={letter.branchPadDepartment || ""}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            const uid = parseUserPadKey(val);
+                            const chosen =
+                              val && val !== "__default__"
+                                ? uid
+                                  ? userPadMap[uid]
+                                  : branchPadMap[val]
+                                : undefined;
+                            onChange({
+                              ...letter,
+                              branchPadDepartment: val || undefined,
+                              ...(chosen?.letterheadStyle
+                                ? { letterheadStyle: chosen.letterheadStyle }
+                                : {}),
+                              ...(chosen?.letterFont
+                                ? { letterFont: chosen.letterFont }
+                                : {}),
+                            });
+                          }}
+                          className="w-full h-10 rounded-lg border border-stone-300 bg-white px-3 text-xs font-medium text-stone-900 focus:outline-none focus:border-[#1E3A8A]"
+                        >
+                          <option value="">
+                            স্বয়ংক্রিয় (নিজস্ব প্যাড বা শাখা অনুযায়ী)
                           </option>
-                        );
-                      })}
-                      <option value="__default__">
-                        প্রতিষ্ঠানের মূল প্যাড (একক স্বাক্ষরকারী)
-                      </option>
-                    </select>
-                    {activeBranchPad && (
-                      <p className="text-[11px] text-stone-700 leading-relaxed">
-                        সক্রিয় প্যাড:{" "}
-                        <span className="font-semibold">
-                          {activeBranchPad.config.branchTitleBn ||
-                            activeBranchPad.departmentName}
-                        </span>
-                        {activeBranchPad.config.signatories.length > 0 &&
-                          ` · নিচে ${toBengaliDigits(
-                            activeBranchPad.config.signatories.length
-                          )} জন স্বাক্ষরকারী প্রদর্শিত হচ্ছে।`}
-                      </p>
-                    )}
-                  </div>
-                )}
+                          {configuredUserPadIds.map((uid) => {
+                            const uPad = userPadMap[uid];
+                            const sigCount = uPad?.signatories?.length || 0;
+                            const isMe = currentUserId === uid;
+                            const label = uPad?.branchTitleBn?.trim() || uid;
+                            return (
+                              <option
+                                key={`user:${uid}`}
+                                value={makeUserPadKey(uid)}
+                              >
+                                {isMe
+                                  ? `আমার নিজস্ব প্যাড (${label})`
+                                  : `ইউজার: ${label} (${uid})`}{" "}
+                                — {toBengaliDigits(sigCount)} জন স্বাক্ষরকারী
+                              </option>
+                            );
+                          })}
+                          {configuredBranchPadNames.map((deptName) => {
+                            const sigCount =
+                              branchPadMap[deptName]?.signatories?.length || 0;
+                            return (
+                              <option key={deptName} value={deptName}>
+                                শাখা: {deptName} ({toBengaliDigits(sigCount)} জন
+                                স্বাক্ষরকারী)
+                              </option>
+                            );
+                          })}
+                          <option value="__default__">
+                            প্রতিষ্ঠানের মূল প্যাড (একক স্বাক্ষরকারী)
+                          </option>
+                        </select>
+                      )}
+                      {activeBranchPad ? (
+                        <p className="text-[11px] text-stone-700 leading-relaxed">
+                          সক্রিয় প্যাড:{" "}
+                          <span className="font-semibold">
+                            {activeBranchPad.isUserPad
+                              ? `ইউজার প্যাড (${activeBranchPad.config.branchTitleBn || activeBranchPad.userId})`
+                              : activeBranchPad.config.branchTitleBn ||
+                                activeBranchPad.departmentName}
+                          </span>
+                          {activeBranchPad.config.signatories.length > 0 &&
+                            ` · নিচে ${toBengaliDigits(
+                              activeBranchPad.config.signatories.length
+                            )} জন স্বাক্ষরকারী প্রদর্শিত হচ্ছে।`}
+                        </p>
+                      ) : (
+                        allowSelfUserPad &&
+                        onOpenPadCustomizer && (
+                          <p className="text-[11px] text-stone-600 leading-relaxed">
+                            এখনও আপনার নিজস্ব প্যাড সেট করা নেই। উপরের “নিজস্ব প্যাড কাস্টমাইজ করুন” লিংক থেকে নিজের হেডার, রঙ ও স্বাক্ষরকারী সেট করুন।
+                          </p>
+                        )
+                      )}
+                    </div>
+                  )}
 
                 <div className="space-y-3">
                   <div>

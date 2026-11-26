@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="bn">
+  <head>
+    <meta charset="utf-8" />
+    <title>পুনর্নির্দেশ হচ্ছে...</title>
+    <script>
+      (function () {
+        var l = window.location;
+        if (l.pathname.indexOf("/api/") === 0) return;
+        try {
+          sessionStorage.setItem(
+            "mdo_spa_redirect",
+            l.pathname + l.search + l.hash
+          );
+        } catch (e) {}
+        l.replace(l.protocol + "//" + l.host + "/");
+      })();
+    </script>
+  </head>
+  <body></body>
+</html>
